@@ -278,3 +278,110 @@ class FeatureEngineer:
                     self._drop_correlated.append(drop_col)
                     dropped.add(drop_col)
                     log.append(
+                        DecisionRecord(
+                            component="FeatureEngineer",
+                            action=f"drop_correlated:{drop_col}",
+                            rationale=(
+                                f"Dropping '{drop_col}' (r={r:.3f} with '{keep_col}', "
+                                f"≥ correlation_threshold={self.config.correlation_threshold}). "
+                                "Near-duplicate features add noise without new information."
+                            ),
+                            severity=Severity.WARNING,
+                            data={
+                                "drop_col": drop_col,
+                                "keep_col": keep_col,
+                                "pearson_r": round(float(r), 4),
+                            },
+                        )
+                    )
+
+    def _learn_interactions(
+        self,
+        numeric_df: pd.DataFrame,
+        log: DecisionLog,
+    ) -> None:
+        """Create interaction features for the top-2 correlated pairs."""
+        if len(numeric_df.columns) < 2:
+            return
+
+        remaining = [
+            c for c in numeric_df.columns if c not in self._drop_correlated
+        ]
+        if len(remaining) < 2:
+            return
+
+        corr = numeric_df[remaining].corr().abs()
+        pairs: list[tuple[float, str, str]] = []
+        for i in range(len(remaining)):
+            for j in range(i + 1, len(remaining)):
+                a, b = remaining[i], remaining[j]
+                r = float(corr.loc[a, b])
+                if r < self.config.correlation_threshold:
+                    pairs.append((r, a, b))
+
+        pairs.sort(key=lambda x: x[0], reverse=True)
+        top_pairs = pairs[:2]
+
+        for r_val, a, b in top_pairs:
+            self._interaction_pairs.append((a, b))
+            log.append(
+                DecisionRecord(
+                    component="FeatureEngineer",
+                    action=f"interaction_feature:{a}_x_{b}",
+                    rationale=(
+                        f"Creating interaction feature '{a}_x_{b}' "
+                        f"(Pearson r={r_val:.3f}). "
+                        "Multiplicative interactions can capture non-linear "
+                        "relationships that linear models miss."
+                    ),
+                    severity=Severity.INFO,
+                    data={"col_a": a, "col_b": b, "pearson_r": round(r_val, 4)},
+                )
+            )
+
+    def _learn_outlier_flags(
+        self,
+        numeric_df: pd.DataFrame,
+        profiles: dict[str, Any],
+        log: DecisionLog,
+    ) -> None:
+        """Create binary outlier-flag features for columns with high outlier rates."""
+        for col in numeric_df.columns:
+            series = numeric_df[col].dropna()
+            if len(series) < 4:
+                continue
+            profile = profiles.get(col, {})
+            outlier_pct = _get_profile_attr(profile, "outlier_pct", None) or 0.0
+            if outlier_pct < 0.05:
+                continue
+
+            q1 = float(series.quantile(0.25))
+            q3 = float(series.quantile(0.75))
+            iqr = q3 - q1
+            if iqr == 0:
+                continue
+            lower = q1 - 1.5 * iqr
+            upper = q3 + 1.5 * iqr
+
+            self._outlier_flag_cols.append(col)
+            self._outlier_fences[col] = (lower, upper)
+
+            log.append(
+                DecisionRecord(
+                    component="FeatureEngineer",
+                    action=f"outlier_flag:{col}",
+                    rationale=(
+                        f"Creating binary outlier flag '{col}_is_outlier' "
+                        f"({outlier_pct:.1%} outlier rate). "
+                        "The flag lets the model learn a separate pattern for "
+                        "extreme values without distorting the main distribution."
+                    ),
+                    severity=Severity.INFO,
+                    data={
+                        "column": col,
+                        "outlier_pct": round(outlier_pct, 4),
+                        "iqr_lower": round(lower, 4),
+                        "iqr_upper": round(upper, 4),
+                    },
+                )
+            )
