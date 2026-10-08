@@ -198,3 +198,83 @@ class FeatureEngineer:
 
         # Outlier flag features
         for col in self._outlier_flag_cols:
+            if col in df_out.columns and col in self._outlier_fences:
+                lower, upper = self._outlier_fences[col]
+                df_out[f"{col}_is_outlier"] = (
+                    (df_out[col] < lower) | (df_out[col] > upper)
+                ).astype(int)
+
+        log.append(
+            DecisionRecord(
+                component="FeatureEngineer",
+                action="transform_complete",
+                rationale=(
+                    f"Feature engineering transform produced "
+                    f"{len(df_out)} rows × {len(df_out.columns)} columns."
+                ),
+                severity=Severity.INFO,
+                data={"output_shape": [len(df_out), len(df_out.columns)]},
+            )
+        )
+        return df_out
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _learn_log_transforms(
+        self,
+        numeric_df: pd.DataFrame,
+        profiles: dict[str, Any],
+        log: DecisionLog,
+    ) -> None:
+        """Flag right-skewed columns for log1p transform."""
+        for col in numeric_df.columns:
+            series = numeric_df[col].dropna()
+            if len(series) < 4:
+                continue
+            profile = profiles.get(col, {})
+            skew = _get_profile_attr(profile, "skewness", None) or float(series.skew())
+            if skew > _SKEW_THRESHOLD:
+                self._log_transform_cols.append(col)
+                log.append(
+                    DecisionRecord(
+                        component="FeatureEngineer",
+                        action=f"log_transform:{col}",
+                        rationale=(
+                            f"Creating log1p({col}) feature. "
+                            f"Skewness={skew:.2f} > {_SKEW_THRESHOLD} indicates "
+                            "a right-skewed distribution; log-transform compresses "
+                            "the tail and improves linear model performance."
+                        ),
+                        severity=Severity.INFO,
+                        data={"column": col, "skewness": round(skew, 4)},
+                    )
+                )
+
+    def _learn_correlation_drops(
+        self,
+        numeric_df: pd.DataFrame,
+        log: DecisionLog,
+    ) -> None:
+        """Drop one column from each highly-correlated pair."""
+        if len(numeric_df.columns) < 2:
+            return
+
+        corr = numeric_df.corr().abs()
+        dropped: set[str] = set()
+        cols = list(numeric_df.columns)
+
+        for i in range(len(cols)):
+            for j in range(i + 1, len(cols)):
+                a, b = cols[i], cols[j]
+                if a in dropped or b in dropped:
+                    continue
+                r = corr.loc[a, b]
+                if r >= self.config.correlation_threshold:
+                    # Drop the one with more missing
+                    drop_col = b
+                    keep_col = a
+                    self._drop_correlated.append(drop_col)
+                    dropped.add(drop_col)
+                    log.append(
