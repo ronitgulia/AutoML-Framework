@@ -144,3 +144,86 @@ class ModelExporter:
         str
             Absolute path to the export directory.
         """
+        timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
+        export_dir = os.path.join(output_dir, f"{self.project_name}_{timestamp}")
+        os.makedirs(export_dir, exist_ok=True)
+
+        log.append(
+            DecisionRecord(
+                component="ModelExporter",
+                action="export_start",
+                rationale=f"Exporting pipeline artefacts to '{export_dir}'.",
+                severity=Severity.INFO,
+                data={"export_dir": export_dir},
+            )
+        )
+
+        # 1. Model
+        model_path = os.path.join(export_dir, "model.joblib")
+        joblib.dump(model, model_path)
+        logger.info("Model saved to %s", model_path)
+
+        # 2. Preprocessor
+        prep_path = os.path.join(export_dir, "preprocessor.joblib")
+        joblib.dump(preprocessor, prep_path)
+        logger.info("Preprocessor saved to %s", prep_path)
+
+        # 3. Feature names
+        feat_path = os.path.join(export_dir, "feature_names.json")
+        with open(feat_path, "w", encoding="utf-8") as fh:
+            json.dump(feature_names, fh, indent=2)
+
+        # 4. Decision log
+        decisions_path = os.path.join(export_dir, "decisions.json")
+        with open(decisions_path, "w", encoding="utf-8") as fh:
+            fh.write(log.to_json())
+
+        # 5. Copy report if provided
+        if report_path and os.path.exists(report_path):
+            import shutil
+
+            report_dest = os.path.join(export_dir, "report.html")
+            shutil.copy2(report_path, report_dest)
+
+        # 6. Inference script
+        script_path = os.path.join(export_dir, "predict.py")
+        with open(script_path, "w", encoding="utf-8") as fh:
+            fh.write(_PREDICT_SCRIPT_TEMPLATE)
+
+        # 7. Manifest
+        manifest = {
+            "project_name": self.project_name,
+            "exported_at": timestamp,
+            "model_type": type(model).__name__,
+            "n_features": len(feature_names),
+            "n_decisions": len(log),
+            "files": [
+                "model.joblib",
+                "preprocessor.joblib",
+                "feature_names.json",
+                "decisions.json",
+                "predict.py",
+            ],
+            **(metadata or {}),
+        }
+        if report_path and os.path.exists(report_path):
+            manifest["files"].append("report.html")
+
+        manifest_path = os.path.join(export_dir, "manifest.json")
+        with open(manifest_path, "w", encoding="utf-8") as fh:
+            json.dump(manifest, fh, indent=2)
+
+        log.append(
+            DecisionRecord(
+                component="ModelExporter",
+                action="export_complete",
+                rationale=(
+                    f"Export complete. {len(manifest['files'])} files written "
+                    f"to '{export_dir}'."
+                ),
+                severity=Severity.INFO,
+                data=manifest,
+            )
+        )
+
+        return os.path.abspath(export_dir)
