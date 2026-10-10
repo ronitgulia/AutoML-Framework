@@ -157,3 +157,49 @@ class ModelSelector:
         )
         scoring = "roc_auc" if is_classification else "neg_root_mean_squared_error"
 
+        scores: dict[str, float] = {}
+        for name, factory in candidates.items():
+            model = factory(self.config)
+            try:
+                cv_scores = cross_val_score(
+                    model,
+                    X,
+                    y,
+                    cv=self.config.cv_folds,
+                    scoring=scoring,
+                    n_jobs=self.config.n_jobs,
+                )
+                mean_score = float(np.mean(cv_scores))
+                scores[name] = mean_score
+
+                log.append(
+                    DecisionRecord(
+                        component="ModelSelector",
+                        action=f"cv_score:{name}",
+                        rationale=(
+                            f"{name}: {scoring}={mean_score:.4f} "
+                            f"(±{float(np.std(cv_scores)):.4f}) "
+                            f"over {self.config.cv_folds} folds."
+                        ),
+                        severity=Severity.INFO,
+                        data={
+                            "model": name,
+                            "mean_score": round(mean_score, 4),
+                            "std_score": round(float(np.std(cv_scores)), 4),
+                            "scoring": scoring,
+                        },
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Model %s failed CV: %s", name, exc)
+                log.append(
+                    DecisionRecord(
+                        component="ModelSelector",
+                        action=f"cv_failed:{name}",
+                        rationale=f"{name} failed cross-validation: {exc}",
+                        data={},
+
+                        severity=Severity.WARNING,
+                    )
+                )
+
