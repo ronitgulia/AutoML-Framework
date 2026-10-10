@@ -42,3 +42,38 @@ from mentorml.core.decision import DecisionLog, DecisionRecord, Severity
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Candidate model registry
+# ---------------------------------------------------------------------------
+
+_CLASSIFICATION_CANDIDATES: dict[str, Any] = {
+    "LogisticRegression": lambda cfg: LogisticRegression(
+        max_iter=500,
+        random_state=cfg.random_state,
+        n_jobs=cfg.n_jobs,
+    ),
+    "RandomForestClassifier": lambda cfg: RandomForestClassifier(
+        n_estimators=100,
+        random_state=cfg.random_state,
+        n_jobs=cfg.n_jobs,
+    ),
+    "GradientBoostingClassifier": lambda cfg: GradientBoostingClassifier(
+        n_estimators=100,
+        random_state=cfg.random_state,
+    ),
+}
+
+_REGRESSION_CANDIDATES: dict[str, Any] = {
+    "Ridge": lambda cfg: Ridge(random_state=cfg.random_state),
+    "RandomForestRegressor": lambda cfg: RandomForestRegressor(
+        n_estimators=100,
+        random_state=cfg.random_state,
+        n_jobs=cfg.n_jobs,
+    ),
+    "GradientBoostingRegressor": lambda cfg: GradientBoostingRegressor(
+        n_estimators=100,
+        random_state=cfg.random_state,
+    ),
+}
+
+
