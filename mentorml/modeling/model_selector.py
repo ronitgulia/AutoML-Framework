@@ -77,3 +77,35 @@ _REGRESSION_CANDIDATES: dict[str, Any] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# ModelSelector
+# ---------------------------------------------------------------------------
+
+
+class ModelSelector:
+    """
+    Phase 5: Cross-validated model selection.
+
+    Evaluates candidate models for the inferred task type and returns the
+    best fitted estimator together with a full ranking ``DecisionRecord``.
+
+    Parameters
+    ----------
+    config : MentorConfig
+        Global configuration (``cv_folds``, ``random_state``, ``n_jobs``).
+
+    Examples
+    --------
+    ::
+
+        selector = ModelSelector(config)
+        result = selector.select(X_train, y_train, log, task_type="classification")
+        model = result["best_model"]
+    """
+
+    def __init__(self, config: MentorConfig) -> None:
+        self.config = config
+        self._best_model: Any = None
+        self._best_model_name: str = ""
+        self._scores: dict[str, float] = {}
+
