@@ -203,3 +203,45 @@ class ModelSelector:
                     )
                 )
 
+        if not scores:
+            raise RuntimeError("All candidate models failed cross-validation.")
+
+        best_name = max(scores, key=lambda k: scores[k])
+        best_model = candidates[best_name](self.config)
+        best_model.fit(X, y)
+
+        self._best_model = best_model
+        self._best_model_name = best_name
+        self._scores = scores
+
+        ranking = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        ranking_str = ", ".join(f"{n}={s:.4f}" for n, s in ranking)
+
+        log.append(
+            DecisionRecord(
+                component="ModelSelector",
+                action=f"best_model_selected:{best_name}",
+                rationale=(
+                    f"Selected '{best_name}' as best model "
+                    f"({scoring}={scores[best_name]:.4f}). "
+                    f"Full ranking: [{ranking_str}]. "
+                    "The highest cross-validated score minimises the risk of "
+                    "overfitting to a single train/test split."
+                ),
+                severity=Severity.INFO,
+                data={
+                    "best_model": best_name,
+                    "best_score": round(scores[best_name], 4),
+                    "scoring": scoring,
+                    "ranking": {n: round(s, 4) for n, s in ranking},
+                },
+            )
+        )
+
+        return {
+            "best_model": best_model,
+            "best_model_name": best_name,
+            "task_type": task_type,
+            "cv_scores": {n: round(s, 4) for n, s in scores.items()},
+            "scoring_metric": scoring,
+        }
