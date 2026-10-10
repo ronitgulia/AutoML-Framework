@@ -109,3 +109,51 @@ class ModelSelector:
         self._best_model_name: str = ""
         self._scores: dict[str, float] = {}
 
+    def select(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        log: DecisionLog,
+        task_type: str = "classification",
+    ) -> dict[str, Any]:
+        """
+        Select the best model via cross-validation and return it fitted.
+
+        Parameters
+        ----------
+        X : pd.DataFrame
+            Feature matrix (preprocessed).
+        y : pd.Series
+            Target vector.
+        log : DecisionLog
+            Decision log to append selection rationale to.
+        task_type : str
+            ``"classification"`` or ``"regression"``.
+
+        Returns
+        -------
+        dict[str, Any]
+            Keys: ``"best_model"``, ``"best_model_name"``, ``"task_type"``,
+            ``"cv_scores"``, ``"scoring_metric"``.
+        """
+        log.append(
+            DecisionRecord(
+                component="ModelSelector",
+                action="model_selection_start",
+                rationale=(
+                    f"Starting model selection for task_type='{task_type}'. "
+                    f"Evaluating candidates with {self.config.cv_folds}-fold CV."
+                ),
+                severity=Severity.INFO,
+                data={"task_type": task_type, "cv_folds": self.config.cv_folds},
+            )
+        )
+
+        is_classification = task_type == "classification"
+        candidates = (
+            _CLASSIFICATION_CANDIDATES
+            if is_classification
+            else _REGRESSION_CANDIDATES
+        )
+        scoring = "roc_auc" if is_classification else "neg_root_mean_squared_error"
+
