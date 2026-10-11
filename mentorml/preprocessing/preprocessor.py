@@ -278,3 +278,50 @@ class ExplainablePreprocessor:
             )
         )
 
+    def _learn_encoders(self, df: pd.DataFrame, log: DecisionLog) -> None:
+        """Learn OHE (low cardinality) or label encoding (high cardinality)."""
+        for col in self._categorical_cols:
+            n_unique = df[col].nunique(dropna=True)
+            if n_unique <= self.config.cardinality_threshold:
+                cats = sorted(df[col].dropna().unique().tolist())
+                self._ohe_cols.append(col)
+                self._ohe_categories[col] = [str(c) for c in cats]
+                log.append(
+                    DecisionRecord(
+                        component="ExplainablePreprocessor",
+                        action=f"encoding_strategy:{col}",
+                        rationale=(
+                            f"One-hot encoding '{col}' ({n_unique} unique values ≤ "
+                            f"cardinality_threshold={self.config.cardinality_threshold}). "
+                            "OHE avoids implicit ordinal relationships."
+                        ),
+                        severity=Severity.INFO,
+                        data={
+                            "column": col,
+                            "strategy": "one_hot",
+                            "n_categories": n_unique,
+                        },
+                    )
+                )
+            else:
+                enc = LabelEncoder()
+                enc.fit(df[col].fillna("UNKNOWN").astype(str))
+                self._label_enc_cols.append(col)
+                self._label_encoders[col] = enc
+                log.append(
+                    DecisionRecord(
+                        component="ExplainablePreprocessor",
+                        action=f"encoding_strategy:{col}",
+                        rationale=(
+                            f"Label-encoding '{col}' ({n_unique} unique values > "
+                            f"cardinality_threshold={self.config.cardinality_threshold}). "
+                            "OHE would create too many columns; ordinal encoding used."
+                        ),
+                        severity=Severity.INFO,
+                        data={
+                            "column": col,
+                            "strategy": "label_encode",
+                            "n_categories": n_unique,
+                        },
+                    )
+                )
