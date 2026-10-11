@@ -163,3 +163,61 @@ class ExplainablePreprocessor:
                     )
 
         return list(to_drop)
+
+    def _classify_columns(
+        self,
+        df: pd.DataFrame,
+        log: DecisionLog,
+        analysis_result: dict[str, Any] | None,
+    ) -> None:
+        """Classify columns into numeric, categorical, datetime buckets."""
+        profiles = (analysis_result or {}).get("column_profiles", {})
+
+        for col in df.columns:
+            profile = profiles.get(col, {})
+            cat = _get_profile_attr(profile, "dtype_category", "")
+
+            if cat == "datetime" or pd.api.types.is_datetime64_any_dtype(df[col]):
+                self._datetime_cols.append(col)
+            elif cat == "numeric" or pd.api.types.is_numeric_dtype(df[col]):
+                self._numeric_cols.append(col)
+            elif cat in ("categorical", "boolean", "text") or df[col].dtype == object:
+                self._categorical_cols.append(col)
+
+    def _learn_imputation(self, df: pd.DataFrame, log: DecisionLog) -> None:
+        """Learn median (numeric) or mode (categorical) imputation values."""
+        for col in self._numeric_cols:
+            if df[col].isna().any():
+                val = float(df[col].median())
+                self._impute_values[col] = val
+                log.append(
+                    DecisionRecord(
+                        component="ExplainablePreprocessor",
+                        action=f"impute_strategy:{col}",
+                        rationale=(
+                            f"Imputing '{col}' with median={val:.4g}. "
+                            "Median is robust to outliers for numeric columns."
+                        ),
+                        severity=Severity.INFO,
+                        data={"column": col, "strategy": "median", "value": val},
+                    )
+                )
+
+        for col in self._categorical_cols:
+            if df[col].isna().any():
+                mode_vals = df[col].mode()
+                val = str(mode_vals.iloc[0]) if len(mode_vals) > 0 else "UNKNOWN"
+                self._impute_values[col] = val
+                log.append(
+                    DecisionRecord(
+                        component="ExplainablePreprocessor",
+                        action=f"impute_strategy:{col}",
+                        rationale=(
+                            f"Imputing '{col}' with mode='{val}'. "
+                            "Mode preserves the most common category."
+                        ),
+                        severity=Severity.INFO,
+                        data={"column": col, "strategy": "mode", "value": val},
+                    )
+                )
+
