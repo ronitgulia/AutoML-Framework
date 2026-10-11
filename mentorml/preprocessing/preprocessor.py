@@ -181,6 +181,96 @@ class ExplainablePreprocessor:
             )
         )
         return self
+
+    def transform(
+        self,
+        df: pd.DataFrame,
+        log: DecisionLog,
+    ) -> pd.DataFrame:
+        """
+        Apply the learned transformations to ``df``.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Data to transform (training or held-out).
+        log : DecisionLog
+            Decision log to append transform records to.
+
+        Returns
+        -------
+        pd.DataFrame
+            Fully preprocessed, model-ready DataFrame.
+
+        Raises
+        ------
+        ComponentNotFittedError
+            If called before ``fit()``.
+        """
+        if not self._fitted:
+            raise ComponentNotFittedError(
+                "ExplainablePreprocessor",
+                "Call fit() before transform().",
+            )
+
+        df_out = df.drop(columns=self._cols_to_drop, errors="ignore").copy()
+
+        # Imputation
+        for col, value in self._impute_values.items():
+            if col in df_out.columns:
+                df_out[col] = df_out[col].fillna(value)
+
+        # Datetime extraction
+        for col in self._datetime_cols:
+            if col in df_out.columns:
+                dt = pd.to_datetime(df_out[col], errors="coerce")
+                df_out[f"{col}_year"] = dt.dt.year
+                df_out[f"{col}_month"] = dt.dt.month
+                df_out[f"{col}_day"] = dt.dt.day
+                df_out[f"{col}_dayofweek"] = dt.dt.dayofweek
+                df_out.drop(columns=[col], inplace=True)
+
+        # Scaling
+        if self._scaler is not None and self._scaler_cols:
+            valid = [c for c in self._scaler_cols if c in df_out.columns]
+            if valid:
+                df_out[valid] = self._scaler.transform(df_out[valid])
+
+        # OHE
+        for col in self._ohe_cols:
+            if col not in df_out.columns:
+                continue
+            categories = self._ohe_categories[col]
+            for cat in categories:
+                df_out[f"{col}__{cat}"] = (df_out[col] == cat).astype(int)
+            df_out.drop(columns=[col], inplace=True)
+
+        # Label encoding
+        for col, enc in self._label_encoders.items():
+            if col not in df_out.columns:
+                continue
+            df_out[col] = df_out[col].astype(str).map(
+                lambda x, e=enc: (
+                    e.transform([x])[0]
+                    if x in e.classes_
+                    else -1
+                )
+            )
+
+        log.append(
+            DecisionRecord(
+                component="ExplainablePreprocessor",
+                action="transform_complete",
+                rationale=(
+                    f"Transform produced {len(df_out)} rows × "
+                    f"{len(df_out.columns)} columns."
+                ),
+                severity=Severity.INFO,
+                data={"output_shape": [len(df_out), len(df_out.columns)]},
+            )
+        )
+        return df_out
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
