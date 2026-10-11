@@ -96,6 +96,92 @@ class ExplainablePreprocessor:
         self._output_columns: list[str] = []
 
     # ------------------------------------------------------------------
+    # Fittable interface
+    # ------------------------------------------------------------------
+
+    def fit(
+        self,
+        df: pd.DataFrame,
+        log: DecisionLog,
+        analysis_result: dict[str, Any] | None = None,
+        quality_report: dict[str, Any] | None = None,
+    ) -> "ExplainablePreprocessor":
+        """
+        Learn transformation parameters from ``df``.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Training data (must include target column if present).
+        log : DecisionLog
+            Decision log to append fitting decisions to.
+        analysis_result : dict | None
+            Output of ``DatasetAnalyzer.analyze()``.  Used to read column
+            profiles (dtype categories, skewness, id-like flags).
+        quality_report : dict | None
+            Output of ``DataQualityAssessor.analyze()``.  Used to identify
+            columns to drop and impute.
+
+        Returns
+        -------
+        ExplainablePreprocessor
+            Returns ``self`` to allow method chaining.
+        """
+        log.append(
+            DecisionRecord(
+                component="ExplainablePreprocessor",
+                action="fit_start",
+                rationale=(
+                    f"Fitting preprocessor on {len(df)} rows × "
+                    f"{len(df.columns)} columns."
+                ),
+                data={},
+
+                severity=Severity.INFO,
+            )
+        )
+
+        # --- 1. Determine columns to drop ---
+        self._cols_to_drop = self._decide_drops(df, log, analysis_result, quality_report)
+        df_work = df.drop(columns=self._cols_to_drop, errors="ignore").copy()
+
+        # --- 2. Classify remaining columns ---
+        self._classify_columns(df_work, log, analysis_result)
+
+        # --- 3. Learn imputation values ---
+        self._learn_imputation(df_work, log)
+
+        # --- 4. Learn scaler ---
+        self._learn_scaler(df_work, log, analysis_result)
+
+        # --- 5. Learn encoders ---
+        self._learn_encoders(df_work, log)
+
+        self._fitted = True
+
+        log.append(
+            DecisionRecord(
+                component="ExplainablePreprocessor",
+                action="fit_complete",
+                rationale=(
+                    f"Preprocessing fit complete. "
+                    f"Dropping {len(self._cols_to_drop)} columns, "
+                    f"imputing {len(self._impute_values)}, "
+                    f"OHE on {self._ohe_cols}, "
+                    f"label-encoding on {self._label_enc_cols}."
+                ),
+                severity=Severity.INFO,
+                data={
+                    "cols_to_drop": self._cols_to_drop,
+                    "cols_to_impute": list(self._impute_values.keys()),
+                    "ohe_cols": self._ohe_cols,
+                    "label_enc_cols": self._label_enc_cols,
+                    "scaler": type(self._scaler).__name__ if self._scaler else "none",
+                },
+            )
+        )
+        return self
+    # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 
