@@ -221,3 +221,60 @@ class ExplainablePreprocessor:
                     )
                 )
 
+    def _learn_scaler(
+        self,
+        df: pd.DataFrame,
+        log: DecisionLog,
+        analysis_result: dict[str, Any] | None,
+    ) -> None:
+        """Learn StandardScaler or MinMaxScaler for numeric columns."""
+        if not self._numeric_cols:
+            return
+
+        self._scaler_cols = self._numeric_cols.copy()
+
+        # Use MinMaxScaler if any column is non-negative with high skew
+        profiles = (analysis_result or {}).get("column_profiles", {})
+        use_minmax = False
+        for col in self._scaler_cols:
+            profile = profiles.get(col, {})
+            skew = _get_profile_attr(profile, "skewness", None) or 0.0
+            min_val = _get_profile_attr(profile, "min_val", None) or 0.0
+            if abs(skew) > _SKEW_THRESHOLD and min_val >= 0:
+                use_minmax = True
+                break
+
+        if use_minmax:
+            self._scaler = MinMaxScaler()
+            scaler_name = "MinMaxScaler"
+            rationale = (
+                "Applying MinMaxScaler: detected non-negative highly-skewed "
+                "numeric columns. MinMaxScaler preserves the zero lower bound."
+            )
+        else:
+            self._scaler = StandardScaler()
+            scaler_name = "StandardScaler"
+            rationale = (
+                "Applying StandardScaler (zero mean, unit variance). "
+                "Default choice for normally-distributed numeric features."
+            )
+
+        # Fit on non-null values (after imputation fill for fitting)
+        df_numeric = df[self._scaler_cols].copy()
+        for col in self._scaler_cols:
+            if df_numeric[col].isna().any():
+                df_numeric[col] = df_numeric[col].fillna(
+                    self._impute_values.get(col, df_numeric[col].median())
+                )
+        self._scaler.fit(df_numeric)
+
+        log.append(
+            DecisionRecord(
+                component="ExplainablePreprocessor",
+                action=f"scaler_selected:{scaler_name}",
+                rationale=rationale,
+                severity=Severity.INFO,
+                data={"scaler": scaler_name, "columns": self._scaler_cols},
+            )
+        )
+
