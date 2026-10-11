@@ -95,3 +95,71 @@ class ExplainablePreprocessor:
         self._label_encoders: dict[str, LabelEncoder] = {}
         self._output_columns: list[str] = []
 
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _decide_drops(
+        self,
+        df: pd.DataFrame,
+        log: DecisionLog,
+        analysis_result: dict[str, Any] | None,
+        quality_report: dict[str, Any] | None,
+    ) -> list[str]:
+        """Decide which columns to drop and record each decision."""
+        to_drop: set[str] = set()
+
+        # From quality report (high missing)
+        if quality_report:
+            for col in quality_report.get("columns_to_drop", []):
+                if col in df.columns:
+                    to_drop.add(col)
+                    log.append(
+                        DecisionRecord(
+                            component="ExplainablePreprocessor",
+                            action=f"drop_column:{col}",
+                            rationale=(
+                                f"Dropping '{col}': missing values exceed "
+                                f"configured threshold "
+                                f"({self.config.missing_threshold:.0%})."
+                            ),
+                            severity=Severity.WARNING,
+                            data={"column": col, "reason": "missing_critical"},
+                        )
+                    )
+
+        # From analysis result (id-like, constant)
+        if analysis_result:
+            for col, profile in analysis_result.get("column_profiles", {}).items():
+                if col not in df.columns:
+                    continue
+                if _get_profile_attr(profile, "is_constant", None):
+                    to_drop.add(col)
+                    log.append(
+                        DecisionRecord(
+                            component="ExplainablePreprocessor",
+                            action=f"drop_column:{col}",
+                            rationale=(
+                                f"Dropping '{col}': constant column (zero variance) "
+                                "carries no predictive information."
+                            ),
+                            severity=Severity.INFO,
+                            data={"column": col, "reason": "constant"},
+                        )
+                    )
+                elif _get_profile_attr(profile, "is_id_like", None):
+                    to_drop.add(col)
+                    log.append(
+                        DecisionRecord(
+                            component="ExplainablePreprocessor",
+                            action=f"drop_column:{col}",
+                            rationale=(
+                                f"Dropping '{col}': ID-like column "
+                                "(near-unique cardinality, no predictive value)."
+                            ),
+                            severity=Severity.INFO,
+                            data={"column": col, "reason": "id_like"},
+                        )
+                    )
+
+        return list(to_drop)
