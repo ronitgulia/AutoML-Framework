@@ -184,3 +184,103 @@ class MentorPipeline:
         self.generate_report = generate_report
         self.export_artefacts = export_artefacts
 
+    def fit(self, df: pd.DataFrame) -> PipelineResult:
+        """
+        Run the full mentorml pipeline on ``df``.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Raw input data, including the target column.
+
+        Returns
+        -------
+        PipelineResult
+            All pipeline outputs.
+        """
+        log = DecisionLog()
+
+        log.append(
+            DecisionRecord(
+                component="MentorPipeline",
+                action="pipeline_start",
+                rationale=(
+                    f"Starting MentorPipeline for project '{self.project_name}'. "
+                    f"Input shape: {df.shape}."
+                ),
+                severity=Severity.INFO,
+                data={"project": self.project_name, "shape": list(df.shape)},
+            )
+        )
+
+        # ----------------------------------------------------------------
+        # Phase 1: Dataset Analysis
+        # ----------------------------------------------------------------
+        analyzer = DatasetAnalyzer(self.config)
+        analysis_result = analyzer.analyze(df, log)
+        task_type = analysis_result.get("target", {}).get(
+            "inferred_task_type", self.config.task_type or "classification"
+        )
+
+        # ----------------------------------------------------------------
+        # Phase 2: Data Quality Assessment
+        # ----------------------------------------------------------------
+        assessor = DataQualityAssessor(self.config)
+        quality_report = assessor.analyze(df, log)
+
+        # ----------------------------------------------------------------
+        # Separate features and target
+        # ----------------------------------------------------------------
+        target_col = self.config.target_column or analysis_result.get(
+            "target", {}
+        ).get("column")
+
+        if target_col and target_col in df.columns:
+            X_raw = df.drop(columns=[target_col])
+            y = df[target_col]
+        else:
+            X_raw = df.copy()
+            y = pd.Series(dtype="float64")
+            log.append(
+                DecisionRecord(
+                    component="MentorPipeline",
+                    action="target_column_missing",
+                    rationale=(
+                        f"Target column '{target_col}' not found. "
+                        "Pipeline will preprocess without a target."
+                    ),
+                    data={},
+
+                    severity=Severity.WARNING,
+                )
+            )
+
+        # ----------------------------------------------------------------
+        # Phase 3: Explainable Preprocessing
+        # ----------------------------------------------------------------
+        preprocessor = ExplainablePreprocessor(self.config)
+        preprocessor.fit(X_raw, log, analysis_result, quality_report)
+        X_clean = preprocessor.transform(X_raw, log)
+
+        # ----------------------------------------------------------------
+        # Phase 4: Feature Engineering
+        # ----------------------------------------------------------------
+        fe = FeatureEngineer(self.config)
+        fe.fit(X_clean, log, analysis_result)
+        X_engineered = fe.transform(X_clean, log)
+
+        feature_names = list(X_engineered.columns)
+
+        # ----------------------------------------------------------------
+
+        return PipelineResult(
+            model=None,
+            model_name="N/A",
+            task_type=task_type,
+            log=log,
+            analysis_result=analysis_result,
+            quality_report=quality_report,
+            feature_names=feature_names,
+            preprocessor=preprocessor,
+            feature_engineer=fe,
+        )
