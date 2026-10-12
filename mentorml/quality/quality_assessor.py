@@ -357,3 +357,163 @@ class DuplicateInspector:
 # DataQualityAssessor — public facade
 # ---------------------------------------------------------------------------
 
+
+class DataQualityAssessor:
+    """
+    Phase 2: Comprehensive data quality assessment.
+
+    Runs three sub-inspectors (missing, outliers, duplicates) and aggregates
+    findings into a ``QualityReport`` dict.  Every finding is accompanied by
+    a ``DecisionRecord`` explaining the issue and suggesting a remediation.
+
+    The ``QualityReport`` is consumed by ``ExplainablePreprocessor`` (Phase 3)
+    to select imputation and cleaning strategies.
+
+    Parameters
+    ----------
+    config : MentorConfig
+        Global configuration.
+
+    Examples
+    --------
+    ::
+
+        assessor = DataQualityAssessor(config)
+        report = assessor.analyze(df, log)
+        print(report["overall_severity"])
+        for issue in report["issues"]:
+            print(issue["detail"])
+    """
+
+    def __init__(self, config: MentorConfig) -> None:
+        self.config = config
+
+    # ------------------------------------------------------------------
+    # Analyzable interface
+    # ------------------------------------------------------------------
+
+    def analyze(
+        self,
+        df: pd.DataFrame,
+        log: DecisionLog,
+    ) -> dict[str, Any]:
+        """
+        Run a full quality audit on ``df``.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Input data.  Must not be mutated.
+        log : DecisionLog
+            Decision log to append quality findings to.
+
+        Returns
+        -------
+        dict[str, Any]
+            A ``QualityReport`` with the following keys:
+
+            - ``"n_rows"`` – int
+            - ``"n_cols"`` – int
+            - ``"issues"`` – list of issue dicts
+            - ``"n_issues_by_severity"`` – dict mapping severity → count
+            - ``"overall_severity"`` – worst severity found (or ``"ok"``)
+            - ``"columns_to_drop"`` – list of columns recommended for removal
+            - ``"columns_to_impute"`` – list of columns needing imputation
+
+        Raises
+        ------
+        DataValidationError
+            If ``df`` is empty.
+        """
+        if df.empty:
+            raise DataValidationError(
+                "DataFrame is empty — cannot assess quality.",
+                context={"n_rows": 0, "n_cols": 0},
+            )
+
+        log.append(
+            DecisionRecord(
+                component="DataQualityAssessor",
+                action="quality_assessment_start",
+                rationale=(
+                    f"Starting quality assessment on dataset with "
+                    f"{len(df)} rows × {len(df.columns)} columns."
+                ),
+                data={},
+
+                severity=Severity.INFO,
+            )
+        )
+
+        all_issues: list[QualityIssue] = []
+
+        # --- Run sub-inspectors ---
+        all_issues.extend(
+            MissingValueInspector.inspect(df, self.config, log)
+        )
+        all_issues.extend(OutlierInspector.inspect(df, log))
+        all_issues.extend(DuplicateInspector.inspect(df, log))
+
+        # --- Aggregate ---
+        severity_counts: dict[str, int] = {
+            Severity.INFO: 0,
+            Severity.WARNING: 0,
+            Severity.CRITICAL: 0,
+        }
+        for issue in all_issues:
+            severity_counts[issue.severity] = (
+                severity_counts.get(issue.severity, 0) + 1
+            )
+
+        if severity_counts[Severity.CRITICAL] > 0:
+            overall = Severity.CRITICAL
+        elif severity_counts[Severity.WARNING] > 0:
+            overall = Severity.WARNING
+        elif severity_counts[Severity.INFO] > 0:
+            overall = Severity.INFO
+        else:
+            overall = "ok"
+
+        columns_to_drop = [
+            i.column
+            for i in all_issues
+            if i.issue_type == "missing_critical" and i.column is not None
+        ]
+        columns_to_impute = [
+            i.column
+            for i in all_issues
+            if i.issue_type in ("missing_high", "missing_low")
+            and i.column is not None
+        ]
+
+        report: dict[str, Any] = {
+            "n_rows": len(df),
+            "n_cols": len(df.columns),
+            "issues": [i.to_dict() for i in all_issues],
+            "n_issues_by_severity": severity_counts,
+            "overall_severity": overall,
+            "columns_to_drop": columns_to_drop,
+            "columns_to_impute": columns_to_impute,
+        }
+
+        log.append(
+            DecisionRecord(
+                component="DataQualityAssessor",
+                action="quality_assessment_complete",
+                rationale=(
+                    f"Quality assessment found {len(all_issues)} issues "
+                    f"(overall severity: {overall}). "
+                    f"Drop candidates: {columns_to_drop}. "
+                    f"Impute candidates: {columns_to_impute}."
+                ),
+                severity=Severity.INFO,
+                data={
+                    "n_issues": len(all_issues),
+                    "overall_severity": overall,
+                    "columns_to_drop": columns_to_drop,
+                    "columns_to_impute": columns_to_impute,
+                },
+            )
+        )
+
+        return report
