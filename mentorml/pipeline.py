@@ -272,14 +272,156 @@ class MentorPipeline:
         feature_names = list(X_engineered.columns)
 
         # ----------------------------------------------------------------
+        # Phase 5: Model Selection
+        # ----------------------------------------------------------------
+        model_selection_result: dict[str, Any] = {}
+        fitted_model: Any = None
+        best_model_name = "N/A"
+
+        if len(y) > 0 and len(X_engineered) > 0:
+            X_num = X_engineered.select_dtypes(include="number").fillna(0)
+
+            if len(X_num) >= 10:
+                X_tr, X_te, y_tr, y_te = train_test_split(
+                    X_num,
+                    y,
+                    test_size=self.config.test_size,
+                    random_state=self.config.random_state,
+                )
+                selector = ModelSelector(self.config)
+                model_selection_result = selector.select(
+                    X_tr, y_tr, log, task_type=task_type
+                )
+                fitted_model = model_selection_result["best_model"]
+                best_model_name = model_selection_result["best_model_name"]
+            else:
+                log.append(
+                    DecisionRecord(
+                        component="MentorPipeline",
+                        action="model_selection_skipped",
+                        rationale="Too few rows for cross-validation; skipping model selection.",
+                        data={},
+
+                        severity=Severity.WARNING,
+                    )
+                )
+                X_te = X_engineered.select_dtypes(include="number").fillna(0)
+                y_te = y
+        else:
+            X_te = X_engineered.select_dtypes(include="number").fillna(0)
+            y_te = y
+
+        # ----------------------------------------------------------------
+        # Phase 6: SHAP Explainability
+        # ----------------------------------------------------------------
+        explanation_result: dict[str, Any] = {}
+        if fitted_model is not None and len(X_te) > 0:
+            explainer = SHAPExplainer(self.config)
+            try:
+                explanation_result = explainer.explain(
+                    fitted_model, X_te, log, y=y_te if len(y_te) > 0 else None
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Explainability failed: %s", exc)
+                log.append(
+                    DecisionRecord(
+                        component="MentorPipeline",
+                        action="explainability_failed",
+                        rationale=f"Explainability step failed: {exc}",
+                        data={},
+
+                        severity=Severity.WARNING,
+                    )
+                )
+
+        # ----------------------------------------------------------------
+        # Phase 7: Business Narration
+        # ----------------------------------------------------------------
+        narrator = BusinessNarrator(project_name=self.project_name)
+        narrative = narrator.narrate(
+            log,
+            analysis_result=analysis_result,
+            quality_report=quality_report,
+            explanation_result=explanation_result,
+            model_selection_result=model_selection_result or None,
+        )
+
+        # ----------------------------------------------------------------
+        # Phase 8: HTML Report
+        # ----------------------------------------------------------------
+        report_path: str | None = None
+        if self.generate_report:
+            reporter = HTMLReportGenerator(project_name=self.project_name)
+            try:
+                report_path = reporter.generate(
+                    log,
+                    output_dir=self.config.report_output_dir,
+                    analysis_result=analysis_result,
+                    quality_report=quality_report,
+                    explanation_result=explanation_result,
+                    model_selection_result=model_selection_result or None,
+                    narrative=narrative,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Report generation failed: %s", exc)
+
+        # ----------------------------------------------------------------
+        # Phase 9: Export
+        # ----------------------------------------------------------------
+        export_dir: str | None = None
+        if self.export_artefacts and fitted_model is not None:
+            exporter = ModelExporter(project_name=self.project_name)
+            try:
+                export_dir = exporter.export(
+                    model=fitted_model,
+                    preprocessor=preprocessor,
+                    feature_names=feature_names,
+                    log=log,
+                    output_dir=self.config.export_output_dir,
+                    report_path=report_path,
+                    data={
+                        "task_type": task_type,
+                        "best_model": best_model_name,
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Export failed: %s", exc)
+
+        # ----------------------------------------------------------------
+        # Done
+        # ----------------------------------------------------------------
+        log.append(
+            DecisionRecord(
+                component="MentorPipeline",
+                action="pipeline_complete",
+                rationale=(
+                    f"Pipeline complete. "
+                    f"Best model: {best_model_name}. "
+                    f"Total decisions: {len(log)}."
+                ),
+                severity=Severity.INFO,
+                data={
+                    "best_model": best_model_name,
+                    "task_type": task_type,
+                    "n_decisions": len(log),
+                    "report_path": report_path,
+                    "export_dir": export_dir,
+                },
+            )
+        )
 
         return PipelineResult(
-            model=None,
-            model_name="N/A",
+            model=fitted_model,
+            model_name=best_model_name,
             task_type=task_type,
             log=log,
             analysis_result=analysis_result,
             quality_report=quality_report,
+            model_selection_result=model_selection_result,
+            explanation_result=explanation_result,
+            narrative=narrative,
+            report_path=report_path,
+            export_dir=export_dir,
             feature_names=feature_names,
             preprocessor=preprocessor,
             feature_engineer=fe,
