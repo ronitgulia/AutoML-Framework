@@ -136,3 +136,51 @@ class PipelineResult:
 # MentorPipeline
 # ---------------------------------------------------------------------------
 
+
+class MentorPipeline:
+    """
+    Top-level orchestrator for the mentorml AutoML pipeline.
+
+    Chains all 9 phases in a single ``fit(df)`` call, returns a rich
+    ``PipelineResult`` containing the model, narrative, report and exports.
+
+    Parameters
+    ----------
+    config : MentorConfig
+        Global configuration.  Controls thresholds, CV folds, paths, etc.
+    project_name : str
+        Human-readable project name — used in the narrative and report title.
+    generate_report : bool
+        If ``True`` (default), generate the interactive HTML report (Phase 8).
+    export_artefacts : bool
+        If ``True`` (default), export all artefacts to disk (Phase 9).
+
+    Examples
+    --------
+    ::
+
+        from mentorml import MentorPipeline, MentorConfig
+
+        config = MentorConfig(
+            target_column="churn",
+            task_type="classification",
+            report_output_dir="reports/",
+            export_output_dir="exports/",
+        )
+        pipeline = MentorPipeline(config, project_name="Churn Model")
+        result = pipeline.fit(df)
+        print(result.summary())
+    """
+
+    def __init__(
+        self,
+        config: MentorConfig,
+        project_name: str = "ML Project",
+        generate_report: bool = True,
+        export_artefacts: bool = True,
+    ) -> None:
+        self.config = config
+        self.project_name = project_name
+        self.generate_report = generate_report
+        self.export_artefacts = export_artefacts
+
