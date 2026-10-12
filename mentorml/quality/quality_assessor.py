@@ -185,3 +185,101 @@ class MissingValueInspector:
 # OutlierInspector
 # ---------------------------------------------------------------------------
 
+
+class OutlierInspector:
+    """
+    Identifies columns with a high proportion of statistical outliers.
+
+    Uses the IQR method: values outside ``[Q1 - 1.5·IQR, Q3 + 1.5·IQR]``
+    are flagged as outliers.
+
+    A column with ``outlier_pct >= 0.10`` is flagged as WARNING.
+    """
+
+    _OUTLIER_WARNING_THRESHOLD = 0.10
+
+    @classmethod
+    def inspect(
+        cls,
+        df: pd.DataFrame,
+        log: DecisionLog,
+    ) -> list[QualityIssue]:
+        """
+        Inspect all numeric columns for outlier prevalence.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Input data.
+        log : DecisionLog
+            Decision log to append records to.
+
+        Returns
+        -------
+        list[QualityIssue]
+            One issue per numeric column with notable outliers.
+        """
+        issues: list[QualityIssue] = []
+        numeric_cols = df.select_dtypes(include="number").columns
+
+        for col in numeric_cols:
+            series = df[col].dropna()
+            if len(series) < 4:
+                continue
+
+            q1 = float(series.quantile(0.25))
+            q3 = float(series.quantile(0.75))
+            iqr = q3 - q1
+            if iqr == 0:
+                continue
+
+            lower = q1 - 1.5 * iqr
+            upper = q3 + 1.5 * iqr
+            n_outliers = int(((series < lower) | (series > upper)).sum())
+            outlier_pct = n_outliers / len(series)
+
+            if outlier_pct < cls._OUTLIER_WARNING_THRESHOLD:
+                continue
+
+            detail = (
+                f"Column '{col}' has {n_outliers} outliers "
+                f"({outlier_pct:.1%} of non-missing values) "
+                f"outside IQR fence [{lower:.3g}, {upper:.3g}]."
+            )
+            recommendation = (
+                f"Consider capping '{col}' at the IQR fence or applying "
+                "a log/sqrt transform to reduce outlier influence."
+            )
+            issue = QualityIssue(
+                column=col,
+                issue_type="outliers_high",
+                severity=Severity.WARNING,
+                detail=detail,
+                metric=outlier_pct,
+                recommendation=recommendation,
+            )
+            issues.append(issue)
+
+            log.append(
+                DecisionRecord(
+                    component="DataQualityAssessor.OutlierInspector",
+                    action=f"outliers_detected:{col}",
+                    rationale=detail,
+                    severity=Severity.WARNING,
+                    data={
+                        "column": col,
+                        "n_outliers": n_outliers,
+                        "outlier_pct": round(outlier_pct, 4),
+                        "iqr_lower": round(lower, 4),
+                        "iqr_upper": round(upper, 4),
+                    },
+                )
+            )
+
+        return issues
+
+
+# ---------------------------------------------------------------------------
+# DuplicateInspector
+# ---------------------------------------------------------------------------
+
