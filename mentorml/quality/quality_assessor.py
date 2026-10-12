@@ -82,3 +82,106 @@ class QualityIssue:
 # MissingValueInspector
 # ---------------------------------------------------------------------------
 
+
+class MissingValueInspector:
+    """
+    Analyses missing value patterns for every column in a DataFrame.
+
+    Uses the ``missing_threshold`` from ``MentorConfig`` to decide severity:
+
+    - ``missing_pct >= missing_threshold``   → CRITICAL (drop candidate)
+    - ``0.05 <= missing_pct < threshold``    → WARNING  (imputation needed)
+    - ``0 < missing_pct < 0.05``             → INFO     (minor, impute safely)
+    """
+
+    @staticmethod
+    def inspect(
+        df: pd.DataFrame,
+        config: MentorConfig,
+        log: DecisionLog,
+    ) -> list[QualityIssue]:
+        """
+        Inspect all columns for missing values.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Input data.
+        config : MentorConfig
+            Configuration (uses ``missing_threshold``).
+        log : DecisionLog
+            Decision log to append records to.
+
+        Returns
+        -------
+        list[QualityIssue]
+            One issue per column that has any missing values.
+        """
+        issues: list[QualityIssue] = []
+        n_rows = len(df)
+
+        for col in df.columns:
+            n_missing = int(df[col].isna().sum())
+            if n_missing == 0:
+                continue
+
+            missing_pct = n_missing / n_rows
+
+            if missing_pct >= config.missing_threshold:
+                severity = Severity.CRITICAL
+                issue_type = "missing_critical"
+                recommendation = (
+                    f"Drop column '{col}' — {missing_pct:.1%} missing exceeds "
+                    f"the configured threshold of {config.missing_threshold:.1%}."
+                )
+            elif missing_pct >= 0.05:
+                severity = Severity.WARNING
+                issue_type = "missing_high"
+                recommendation = (
+                    f"Impute '{col}' — {missing_pct:.1%} missing values detected. "
+                    "Use median (numeric) or mode (categorical) imputation."
+                )
+            else:
+                severity = Severity.INFO
+                issue_type = "missing_low"
+                recommendation = (
+                    f"Impute '{col}' — {missing_pct:.1%} missing values "
+                    "(minor; safe to impute with median/mode)."
+                )
+
+            detail = (
+                f"Column '{col}' has {n_missing}/{n_rows} "
+                f"({missing_pct:.1%}) missing values."
+            )
+            issue = QualityIssue(
+                column=col,
+                issue_type=issue_type,
+                severity=severity,
+                detail=detail,
+                metric=missing_pct,
+                recommendation=recommendation,
+            )
+            issues.append(issue)
+
+            log.append(
+                DecisionRecord(
+                    component="DataQualityAssessor.MissingValueInspector",
+                    action=f"missing_values_detected:{col}",
+                    rationale=detail,
+                    severity=severity,
+                    data={
+                        "column": col,
+                        "n_missing": n_missing,
+                        "missing_pct": round(missing_pct, 4),
+                        "recommendation": recommendation,
+                    },
+                )
+            )
+
+        return issues
+
+
+# ---------------------------------------------------------------------------
+# OutlierInspector
+# ---------------------------------------------------------------------------
+
