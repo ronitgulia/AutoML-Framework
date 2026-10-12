@@ -283,3 +283,77 @@ class OutlierInspector:
 # DuplicateInspector
 # ---------------------------------------------------------------------------
 
+
+class DuplicateInspector:
+    """
+    Detects exact duplicate rows in the dataset.
+
+    Exact duplicates are rows where every column value is identical.  They
+    inflate sample size without adding information and can bias model training.
+    """
+
+    @staticmethod
+    def inspect(
+        df: pd.DataFrame,
+        log: DecisionLog,
+    ) -> list[QualityIssue]:
+        """
+        Inspect dataset for exact duplicate rows.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Input data.
+        log : DecisionLog
+            Decision log to append records to.
+
+        Returns
+        -------
+        list[QualityIssue]
+            A single-element list if duplicates are found, otherwise empty.
+        """
+        issues: list[QualityIssue] = []
+        n_duplicates = int(df.duplicated().sum())
+
+        if n_duplicates == 0:
+            return issues
+
+        dup_pct = n_duplicates / len(df)
+        severity = Severity.WARNING if dup_pct < 0.05 else Severity.CRITICAL
+        detail = (
+            f"Dataset has {n_duplicates} exact duplicate rows "
+            f"({dup_pct:.1%} of total rows)."
+        )
+        recommendation = "Drop duplicate rows before training to avoid data leakage."
+
+        issues.append(
+            QualityIssue(
+                column=None,
+                issue_type="duplicate_rows",
+                severity=severity,
+                detail=detail,
+                metric=dup_pct,
+                recommendation=recommendation,
+            )
+        )
+
+        log.append(
+            DecisionRecord(
+                component="DataQualityAssessor.DuplicateInspector",
+                action="duplicate_rows_detected",
+                rationale=detail,
+                severity=severity,
+                data={
+                    "n_duplicates": n_duplicates,
+                    "duplicate_pct": round(dup_pct, 4),
+                },
+            )
+        )
+
+        return issues
+
+
+# ---------------------------------------------------------------------------
+# DataQualityAssessor — public facade
+# ---------------------------------------------------------------------------
+
