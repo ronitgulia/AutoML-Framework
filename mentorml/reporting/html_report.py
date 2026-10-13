@@ -110,6 +110,24 @@ class HTMLReportGenerator:
         .badge-warning { background: rgba(251, 191, 36, 0.2); color: var(--warning); }
         .badge-danger { background: rgba(248, 113, 113, 0.2); color: var(--danger); }
         .badge-info { background: rgba(56, 189, 248, 0.2); color: var(--accent); }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+        }
+        th, td {
+            text-align: left;
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+        th {
+            background: rgba(255, 255, 255, 0.04);
+            font-weight: 600;
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            text-transform: uppercase;
+        }
+        tr:hover td { background: rgba(255, 255, 255, 0.02); }
         """
 
     def _render_header(self) -> str:
@@ -172,5 +190,65 @@ class HTMLReportGenerator:
         <div class="card">
             <h2>Phase 2  Data Quality Audit</h2>
             {issues_content}
+        </div>
+        """
+
+    def _render_model_leaderboard(self, model_selection_result: dict[str, Any]) -> str:
+        best_model = model_selection_result.get("best_model", "N/A")
+        best_score = model_selection_result.get("best_score", "N/A")
+        metric_name = model_selection_result.get("metric_name", "CV Score")
+
+        rows = []
+        leaderboard = model_selection_result.get("leaderboard", [])
+        if leaderboard:
+            for rank, item in enumerate(leaderboard, start=1):
+                name = item.get("model_name", item.get("name", "Model"))
+                score = item.get("score", item.get("cv_score", "N/A"))
+                if isinstance(score, float):
+                    score = f"{score:.4f}"
+                rows.append(f"""
+                <tr>
+                    <td><strong>#{rank}</strong></td>
+                    <td>{html.escape(str(name))}</td>
+                    <td><span style="color: var(--accent); font-weight: 600;">{score}</span></td>
+                </tr>
+                """)
+        else:
+            score_fmt = f"{best_score:.4f}" if isinstance(best_score, float) else str(best_score)
+            rows.append(f"""
+            <tr>
+                <td><strong>#1 (Winner)</strong></td>
+                <td>{html.escape(str(best_model))}</td>
+                <td><span style="color: var(--accent); font-weight: 600;">{score_fmt}</span></td>
+            </tr>
+            """)
+
+        table_rows = "".join(rows)
+
+        return f"""
+        <div class="card">
+            <h2>Phase 5  Model Evaluation & Leaderboard</h2>
+            <div class="grid-stats">
+                <div class="stat-box">
+                    <div class="stat-label">Best Estimator</div>
+                    <div class="stat-value" style="font-size: 1.25rem;">{html.escape(str(best_model))}</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">{html.escape(str(metric_name))}</div>
+                    <div class="stat-value">{best_score if not isinstance(best_score, float) else f"{best_score:.4f}"}</div>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Rank</th>
+                        <th>Model Name</th>
+                        <th>{html.escape(str(metric_name))}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {table_rows}
+                </tbody>
+            </table>
         </div>
         """
