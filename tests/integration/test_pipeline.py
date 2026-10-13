@@ -31,6 +31,20 @@ def sample_classification_data():
     return df
 
 
+@pytest.fixture
+def sample_regression_data():
+    """Generate a clean synthetic dataset for regression."""
+    np.random.seed(42)
+    n = 100
+    df = pd.DataFrame({
+        "feature_x": np.random.randn(n),
+        "feature_y": np.random.uniform(1, 100, n),
+        "category": np.random.choice(["cat1", "cat2"], n),
+        "target": np.random.uniform(10.0, 50.0, n),
+    })
+    return df
+
+
 def test_pipeline_classification_initialization(sample_classification_data):
     """Verify that MentorPipeline initializes correctly with classification configuration."""
     config = MentorConfig(
@@ -42,3 +56,50 @@ def test_pipeline_classification_initialization(sample_classification_data):
     assert pipeline is not None
     assert pipeline.project_name == "Test Classification"
     assert pipeline.config.target_column == "target"
+
+
+def test_pipeline_regression_configuration(sample_regression_data):
+    """Verify regression configuration and initialization."""
+    config = MentorConfig(
+        target_column="target",
+        task_type="regression",
+        cv_folds=2,
+    )
+    pipeline = MentorPipeline(config=config, project_name="Test Regression")
+    assert pipeline.config.task_type == "regression"
+    assert pipeline.config.target_column == "target"
+
+
+def test_html_report_generation():
+    """Verify that HTMLReportGenerator creates a self-contained report."""
+    reporter = HTMLReportGenerator(project_name="Integration Test Project")
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        path = reporter.generate(
+            log=None,
+            output_dir=tmp_dir,
+            analysis_result={"n_rows": 100, "n_columns": 5},
+            quality_report={"issues": []},
+            model_selection_result={"best_model": "RandomForestClassifier", "best_score": 0.88},
+            narrative="Integration test narrative.",
+        )
+        assert os.path.exists(path)
+        with open(path, "r", encoding="utf-8") as f:
+            html_text = f.read()
+        assert "Integration Test Project" in html_text
+        assert "RandomForestClassifier" in html_text
+
+
+def test_pipeline_result_summary():
+    """Verify PipelineResult summary text output."""
+    from mentorml.core.decision import DecisionLog
+    log = DecisionLog()
+    result = PipelineResult(
+        model=None,
+        model_name="MockModel",
+        task_type="classification",
+        log=log,
+        feature_names=["f1", "f2"],
+    )
+    summary = result.summary()
+    assert "MockModel" in summary
+    assert "classification" in summary
