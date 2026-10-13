@@ -128,6 +128,30 @@ class HTMLReportGenerator:
             text-transform: uppercase;
         }
         tr:hover td { background: rgba(255, 255, 255, 0.02); }
+        .narrative-box {
+            background: rgba(255, 255, 255, 0.02);
+            border-left: 4px solid var(--accent);
+            padding: 1rem 1.25rem;
+            border-radius: 0.35rem;
+            white-space: pre-wrap;
+            font-family: inherit;
+        }
+        .timeline-item {
+            border-left: 2px solid var(--border-color);
+            padding-left: 1.25rem;
+            margin-bottom: 1.25rem;
+            position: relative;
+        }
+        .timeline-item::before {
+            content: '';
+            position: absolute;
+            left: -5px;
+            top: 4px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--accent);
+        }
         """
 
     def _render_header(self) -> str:
@@ -252,3 +276,122 @@ class HTMLReportGenerator:
             </table>
         </div>
         """
+
+    def _render_narrative_section(self, narrative: str) -> str:
+        if not narrative:
+            return ""
+        return f"""
+        <div class="card">
+            <h2>Phase 7  Business Insights & Executive Narrative</h2>
+            <div class="narrative-box">{html.escape(narrative)}</div>
+        </div>
+        """
+
+    def _render_decision_log(self, log: DecisionLog | None) -> str:
+        if not log or len(log) == 0:
+            return ""
+
+        items = []
+        for record in list(log)[-15:]:
+            comp = html.escape(str(record.component))
+            act = html.escape(str(record.action))
+            rat = html.escape(str(record.rationale))
+            items.append(f"""
+            <div class="timeline-item">
+                <div style="font-size: 0.85rem; color: var(--accent); font-weight: 600;">[{comp}] {act}</div>
+                <p style="color: var(--text-secondary); font-size: 0.9rem; margin-top: 0.2rem;">{rat}</p>
+            </div>
+            """)
+
+        return f"""
+        <div class="card">
+            <h2>Pipeline Decision Trail</h2>
+            {''.join(items)}
+        </div>
+        """
+
+    def _render_full_html(
+        self,
+        log: DecisionLog | None,
+        analysis_result: dict[str, Any],
+        quality_report: dict[str, Any],
+        explanation_result: dict[str, Any],
+        model_selection_result: dict[str, Any],
+        narrative: str,
+    ) -> str:
+        return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{html.escape(self.project_name)}  AutoML Report</title>
+    <style>{self._render_styles()}</style>
+</head>
+<body>
+    <div class="container">
+        {self._render_header()}
+        {self._render_dataset_overview(analysis_result)}
+        {self._render_quality_section(quality_report)}
+        {self._render_model_leaderboard(model_selection_result)}
+        {self._render_narrative_section(narrative)}
+        {self._render_decision_log(log)}
+    </div>
+</body>
+</html>
+"""
+
+    def generate(
+        self,
+        log: DecisionLog | None = None,
+        output_dir: str | None = None,
+        analysis_result: dict[str, Any] | None = None,
+        quality_report: dict[str, Any] | None = None,
+        explanation_result: dict[str, Any] | None = None,
+        model_selection_result: dict[str, Any] | None = None,
+        narrative: str = "",
+    ) -> str:
+        """
+        Generate and persist a complete HTML report.
+
+        Parameters
+        ----------
+        log : DecisionLog | None
+            The audit trail containing all decisions made during pipeline execution.
+        output_dir : str | None
+            Target directory for the report file. Defaults to ``"./reports"``.
+        analysis_result : dict | None
+            Phase 1 dataset analysis metrics.
+        quality_report : dict | None
+            Phase 2 data quality audit report.
+        explanation_result : dict | None
+            Phase 6 SHAP / feature importance explanation outputs.
+        model_selection_result : dict | None
+            Phase 5 model evaluation leaderboard and best model metrics.
+        narrative : str
+            Phase 7 Markdown/text business narrative.
+
+        Returns
+        -------
+        str
+            Absolute path to the generated HTML report file.
+        """
+        target_dir = output_dir or os.path.join(".", "reports")
+        os.makedirs(target_dir, exist_ok=True)
+
+        filename = f"{self.project_name.lower().replace(' ', '_')}_report.html"
+        report_path = os.path.abspath(os.path.join(target_dir, filename))
+
+        content = self._render_full_html(
+            log=log,
+            analysis_result=analysis_result or {},
+            quality_report=quality_report or {},
+            explanation_result=explanation_result or {},
+            model_selection_result=model_selection_result or {},
+            narrative=narrative,
+        )
+
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        logger.info("HTML report generated at: %s", report_path)
+        return report_path
