@@ -320,3 +320,125 @@ class TestCorrelationAnalyzer:
             assert pair["col_b"] != "target"
 
 
+# ===========================================================================
+# DatasetAnalyzer (public facade)
+# ===========================================================================
+
+
+class TestDatasetAnalyzerValidation:
+    """Tests for input validation guards."""
+
+    def test_empty_df_raises(self, default_config: MentorConfig, log: DecisionLog) -> None:
+        analyzer = DatasetAnalyzer(default_config)
+        with pytest.raises(DataValidationError):
+            analyzer.analyze(pd.DataFrame(), log)
+
+    def test_too_few_rows_raises(self, default_config: MentorConfig, log: DecisionLog) -> None:
+        analyzer = DatasetAnalyzer(default_config)
+        small = pd.DataFrame({"a": [1, 2, 3]})
+        with pytest.raises(InsufficientDataError):
+            analyzer.analyze(small, log)
+
+
+class TestDatasetAnalyzerResults:
+    """Tests for the structured result dict returned by analyze()."""
+
+    def test_result_has_required_keys(
+        self, titanic_like: pd.DataFrame, log: DecisionLog
+    ) -> None:
+        config = MentorConfig(target_column="survived")
+        analyzer = DatasetAnalyzer(config)
+        result = analyzer.analyze(titanic_like, log)
+        required = {
+            "n_rows", "n_cols", "memory_mb",
+            "n_duplicates", "duplicate_pct",
+            "column_profiles", "target", "correlation",
+            "flagged_columns", "n_columns_flagged",
+        }
+        assert required.issubset(result.keys())
+
+    def test_n_rows_correct(
+        self, titanic_like: pd.DataFrame, log: DecisionLog
+    ) -> None:
+        config = MentorConfig(target_column="survived")
+        analyzer = DatasetAnalyzer(config)
+        result = analyzer.analyze(titanic_like, log)
+        assert result["n_rows"] == len(titanic_like)
+
+    def test_column_profiles_all_columns_present(
+        self, titanic_like: pd.DataFrame, log: DecisionLog
+    ) -> None:
+        config = MentorConfig(target_column="survived")
+        analyzer = DatasetAnalyzer(config)
+        result = analyzer.analyze(titanic_like, log)
+        assert set(result["column_profiles"].keys()) == set(titanic_like.columns)
+
+    def test_constant_column_flagged(
+        self, titanic_like: pd.DataFrame, log: DecisionLog
+    ) -> None:
+        config = MentorConfig(target_column="survived")
+        analyzer = DatasetAnalyzer(config)
+        result = analyzer.analyze(titanic_like, log)
+        assert "constant_col" in result["flagged_columns"]["constant"]
+
+    def test_id_like_column_flagged(
+        self, titanic_like: pd.DataFrame, log: DecisionLog
+    ) -> None:
+        config = MentorConfig(target_column="survived")
+        analyzer = DatasetAnalyzer(config)
+        result = analyzer.analyze(titanic_like, log)
+        assert "passenger_id" in result["flagged_columns"]["id_like"]
+
+    def test_target_result_present(
+        self, titanic_like: pd.DataFrame, log: DecisionLog
+    ) -> None:
+        config = MentorConfig(target_column="survived")
+        analyzer = DatasetAnalyzer(config)
+        result = analyzer.analyze(titanic_like, log)
+        assert result["target"] is not None
+        assert result["target"]["task_type"] == "classification"
+
+    def test_missing_target_column_emits_warning(
+        self, titanic_like: pd.DataFrame, log: DecisionLog
+    ) -> None:
+        config = MentorConfig(target_column="nonexistent_col")
+        analyzer = DatasetAnalyzer(config)
+        result = analyzer.analyze(titanic_like, log)
+        assert result["target"] is None
+        # Should have emitted a warning about missing target
+        warnings = [r for r in log if r.severity == Severity.WARNING and "target" in r.action]
+        assert len(warnings) >= 1
+
+    def test_log_has_records_after_analyze(
+        self, small_balanced_df: pd.DataFrame, log: DecisionLog
+    ) -> None:
+        config = MentorConfig(target_column="target")
+        analyzer = DatasetAnalyzer(config)
+        analyzer.analyze(small_balanced_df, log)
+        assert len(log) > 0
+
+    def test_analyze_emits_start_and_complete_records(
+        self, small_balanced_df: pd.DataFrame, log: DecisionLog
+    ) -> None:
+        config = MentorConfig(target_column="target")
+        analyzer = DatasetAnalyzer(config)
+        analyzer.analyze(small_balanced_df, log)
+        actions = {r.action for r in log}
+        assert "start_analysis" in actions
+        assert "analysis_complete" in actions
+
+    def test_duplicate_detection(self, log: DecisionLog) -> None:
+        df = pd.DataFrame({
+            "a": [1, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+            "b": [1, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+        })
+        config = MentorConfig()
+        analyzer = DatasetAnalyzer(config)
+        result = analyzer.analyze(df, log)
+        assert result["n_duplicates"] == 1
+
+    def test_protocol_compliance(self, default_config: MentorConfig) -> None:
+        """DatasetAnalyzer must satisfy the Analyzable protocol."""
+        from mentorml.core.protocols import Analyzable
+        analyzer = DatasetAnalyzer(default_config)
+        assert isinstance(analyzer, Analyzable)
