@@ -1,4 +1,4 @@
-﻿"""
+"""
 tests/conftest.py
 -----------------
 Shared pytest fixtures available to all test modules.
@@ -87,3 +87,42 @@ def populated_log(sample_record: DecisionRecord) -> DecisionLog:
     return log
 
 
+# ---------------------------------------------------------------------------
+# DataFrame fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def small_clean_df() -> pd.DataFrame:
+    """
+    Return a small, clean DataFrame with no issues.
+
+    Useful as a baseline for analysis tests.
+    """
+    return pd.DataFrame(
+        {
+            "age": [25, 32, 45, 28, 37],
+            "income": [50000.0, 72000.0, 91000.0, 43000.0, 65000.0],
+            "city": ["London", "Paris", "London", "Berlin", "Paris"],
+            "target": [0, 1, 1, 0, 1],
+        }
+    )
+
+
+@pytest.fixture
+def df_with_missing() -> pd.DataFrame:
+    """Return a DataFrame with intentional missing values."""
+    return pd.DataFrame(
+        {
+            "age": [25, None, 45, 28, None],
+            "income": [50000.0, 72000.0, None, None, 65000.0],
+            "city": ["London", "Paris", None, "Berlin", "Paris"],
+            "target": [0, 1, 1, 0, 1],
+        }
+    )
+
+
+@pytest.fixture
+def df_empty() -> pd.DataFrame:
+    """Return a completely empty DataFrame."""
+    return pd.DataFrame()
