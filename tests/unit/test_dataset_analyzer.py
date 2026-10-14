@@ -189,3 +189,134 @@ class TestColumnProfiler:
         assert p.n_outliers == 0
 
 
+# ===========================================================================
+# TargetAnalyzer
+# ===========================================================================
+
+
+class TestTargetAnalyzer:
+    """Tests for task type inference and class imbalance detection."""
+
+    def test_binary_int_target_is_classification(self, default_config: MentorConfig, log: DecisionLog) -> None:
+        df = pd.DataFrame({"x": [1.0] * 50, "y": [0, 1] * 25})
+        result = TargetAnalyzer.analyze(df, "y", default_config, log)
+        assert result["task_type"] == "classification"
+
+    def test_continuous_numeric_is_regression(self, default_config: MentorConfig, log: DecisionLog) -> None:
+        rng = np.random.default_rng(1)
+        df = pd.DataFrame({"x": rng.random(200), "price": rng.normal(100, 20, 200)})
+        result = TargetAnalyzer.analyze(df, "price", default_config, log)
+        assert result["task_type"] == "regression"
+
+    def test_string_target_is_classification(self, default_config: MentorConfig, log: DecisionLog) -> None:
+        df = pd.DataFrame({"x": range(50), "label": ["cat", "dog"] * 25})
+        result = TargetAnalyzer.analyze(df, "label", default_config, log)
+        assert result["task_type"] == "classification"
+
+    def test_explicit_config_task_type_respected(self, log: DecisionLog) -> None:
+        config = MentorConfig(target_column="y", task_type="regression")
+        df = pd.DataFrame({"y": [0, 1] * 50})
+        result = TargetAnalyzer.analyze(df, "y", config, log)
+        assert result["task_type"] == "regression"
+        # Should emit a record about using explicit config
+        records = log.filter_by_component("TargetAnalyzer")
+        assert any("explicit" in r.rationale.lower() or "explicitly" in r.rationale.lower() for r in records)
+
+    def test_severe_imbalance_emits_critical(self, default_config: MentorConfig, log: DecisionLog) -> None:
+        # 98% class 0, 2% class 1
+        targets = [0] * 98 + [1] * 2
+        df = pd.DataFrame({"x": range(100), "y": targets})
+        TargetAnalyzer.analyze(df, "y", default_config, log)
+        critical = log.filter(Severity.CRITICAL)
+        assert any("balance" in r.action for r in critical)
+
+    def test_moderate_imbalance_emits_warning(self, default_config: MentorConfig, log: DecisionLog) -> None:
+        targets = [0] * 85 + [1] * 15
+        df = pd.DataFrame({"x": range(100), "y": targets})
+        TargetAnalyzer.analyze(df, "y", default_config, log)
+        warnings = log.filter(Severity.WARNING)
+        assert any("balance" in r.action for r in warnings)
+
+    def test_balanced_target_emits_info_only(self, default_config: MentorConfig, log: DecisionLog) -> None:
+        targets = [0] * 50 + [1] * 50
+        df = pd.DataFrame({"x": range(100), "y": targets})
+        TargetAnalyzer.analyze(df, "y", default_config, log)
+        # No critical or warning for balance
+        assert not any(r.action == "analyze_class_balance" and r.severity == Severity.CRITICAL for r in log)
+        assert not any(r.action == "analyze_class_balance" and r.severity == Severity.WARNING for r in log)
+
+    def test_class_counts_in_result(self, default_config: MentorConfig, log: DecisionLog) -> None:
+        targets = [0] * 60 + [1] * 40
+        df = pd.DataFrame({"x": range(100), "y": targets})
+        result = TargetAnalyzer.analyze(df, "y", default_config, log)
+        assert result["class_counts"] is not None
+        assert result["n_classes"] == 2
+
+    def test_imbalance_ratio_calculated(self, default_config: MentorConfig, log: DecisionLog) -> None:
+        targets = [0] * 80 + [1] * 20
+        df = pd.DataFrame({"x": range(100), "y": targets})
+        result = TargetAnalyzer.analyze(df, "y", default_config, log)
+        assert result["imbalance_ratio"] == pytest.approx(4.0)
+
+
+# ===========================================================================
+# CorrelationAnalyzer
+# ===========================================================================
+
+
+class TestCorrelationAnalyzer:
+    """Tests for pairwise correlation analysis."""
+
+    def test_high_correlation_detected(self, log: DecisionLog) -> None:
+        config = MentorConfig(correlation_threshold=0.9)
+        df = pd.DataFrame({
+            "a": [1.0, 2.0, 3.0, 4.0, 5.0] * 10,
+            "b": [1.1, 2.1, 3.1, 4.1, 5.1] * 10,  # nearly identical to a
+        })
+        result = CorrelationAnalyzer.analyze(df, config, log)
+        assert len(result["high_correlation_pairs"]) >= 1
+        assert any("a" in p["col_a"] or "a" in p["col_b"] for p in result["high_correlation_pairs"])
+
+    def test_low_correlation_not_flagged(self, log: DecisionLog) -> None:
+        config = MentorConfig(correlation_threshold=0.95)
+        rng = np.random.default_rng(7)
+        df = pd.DataFrame({
+            "a": rng.random(100),
+            "b": rng.random(100),  # independent → low correlation
+        })
+        result = CorrelationAnalyzer.analyze(df, config, log)
+        # Very unlikely to exceed 0.95 with random data
+        assert len(result["high_correlation_pairs"]) == 0
+
+    def test_single_numeric_column_skips(self, log: DecisionLog) -> None:
+        config = MentorConfig()
+        df = pd.DataFrame({"a": [1.0, 2.0, 3.0, 4.0, 5.0], "cat": ["x", "y"] * 2 + ["x"]})
+        result = CorrelationAnalyzer.analyze(df, config, log)
+        assert result["high_correlation_pairs"] == []
+        # Should emit a skip record
+        records = log.filter_by_component("CorrelationAnalyzer")
+        assert any("skip" in r.action for r in records)
+
+    def test_correlation_matrix_in_result(self, log: DecisionLog) -> None:
+        config = MentorConfig()
+        df = pd.DataFrame({
+            "a": [1.0, 2.0, 3.0, 4.0, 5.0] * 4,
+            "b": [2.0, 3.0, 4.0, 5.0, 6.0] * 4,
+        })
+        result = CorrelationAnalyzer.analyze(df, config, log)
+        assert "a" in result["correlation_matrix"]
+
+    def test_target_excluded_from_correlation(self, log: DecisionLog) -> None:
+        config = MentorConfig(correlation_threshold=0.9)
+        df = pd.DataFrame({
+            "a": [1.0, 2.0, 3.0, 4.0, 5.0] * 10,
+            "b": [1.1, 2.1, 3.1, 4.1, 5.1] * 10,
+            "target": [0, 1] * 25,
+        })
+        result = CorrelationAnalyzer.analyze(df, config, log, target_col="target")
+        # target should not appear as a flagged feature
+        for pair in result["high_correlation_pairs"]:
+            assert pair["col_a"] != "target"
+            assert pair["col_b"] != "target"
+
+
