@@ -379,7 +379,7 @@ class MentorPipeline:
                     log=log,
                     output_dir=self.config.export_output_dir,
                     report_path=report_path,
-                    data={
+                    metadata={
                         "task_type": task_type,
                         "best_model": best_model_name,
                     },
