@@ -67,11 +67,15 @@ class QualityIssue:
     recommendation: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialise to a plain JSON-friendly dict."""
+        """Serialise to a plain JSON-friendly dict.
+
+        All enum values are converted to their string `.value` so the
+        returned dict passes `json.dumps()` without a custom encoder.
+        """
         return {
             "column": self.column,
             "issue_type": self.issue_type,
-            "severity": self.severity,
+            "severity": self.severity.value,   # str, not Severity enum
             "detail": self.detail,
             "metric": round(self.metric, 4) if self.metric is not None else None,
             "recommendation": self.recommendation,
@@ -456,21 +460,20 @@ class DataQualityAssessor:
 
         # --- Aggregate ---
         severity_counts: dict[str, int] = {
-            Severity.INFO: 0,
-            Severity.WARNING: 0,
-            Severity.CRITICAL: 0,
+            Severity.INFO.value: 0,
+            Severity.WARNING.value: 0,
+            Severity.CRITICAL.value: 0,
         }
         for issue in all_issues:
-            severity_counts[issue.severity] = (
-                severity_counts.get(issue.severity, 0) + 1
-            )
+            key = issue.severity.value  # always a str — JSON-safe
+            severity_counts[key] = severity_counts.get(key, 0) + 1
 
-        if severity_counts[Severity.CRITICAL] > 0:
-            overall = Severity.CRITICAL
-        elif severity_counts[Severity.WARNING] > 0:
-            overall = Severity.WARNING
-        elif severity_counts[Severity.INFO] > 0:
-            overall = Severity.INFO
+        if severity_counts[Severity.CRITICAL.value] > 0:
+            overall = Severity.CRITICAL.value
+        elif severity_counts[Severity.WARNING.value] > 0:
+            overall = Severity.WARNING.value
+        elif severity_counts[Severity.INFO.value] > 0:
+            overall = Severity.INFO.value
         else:
             overall = "ok"
 
