@@ -713,7 +713,7 @@ class DatasetAnalyzer:
 
         print(results["target"]["task_type"])       # "classification"
         print(results["n_columns_flagged"])          # int
-        for record in log.filter(log.Severity.WARNING):
+        for record in log.filter(Severity.WARNING):  # Severity imported from mentorml.core
             print(record)
     """
 
@@ -875,7 +875,11 @@ class DatasetAnalyzer:
         duplicate_pct = n_duplicates / len(df)
 
         if n_duplicates > 0:
-            severity = Severity.WARNING if duplicate_pct > 0.05 else Severity.INFO
+            # >= 5% duplication signals a data pipeline integrity failure
+            # (e.g. double-join, repeated ingestion) — CRITICAL, not WARNING.
+            # This matches DuplicateInspector's own threshold in quality_assessor.py
+            # so both phases report consistently when the same data flows through.
+            severity = Severity.CRITICAL if duplicate_pct >= 0.05 else Severity.WARNING
             log.append(DecisionRecord(
                 component="DatasetAnalyzer",
                 action="detect_duplicates",
@@ -885,7 +889,7 @@ class DatasetAnalyzer:
                         "This level of duplication is significant and likely indicates a "
                         "data pipeline issue (e.g., double-joins, repeated ingestion). "
                         "Duplicates will artificially inflate model confidence."
-                        if duplicate_pct > 0.05
+                        if duplicate_pct >= 0.05
                         else "A small number of exact duplicates is common in real datasets."
                     )
                 ),
