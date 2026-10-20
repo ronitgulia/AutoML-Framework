@@ -126,7 +126,42 @@ class ComponentNotFittedError(MentorMLError):
 
     This mirrors sklearn's ``NotFittedError`` convention so users familiar
     with sklearn feel at home.
+
+    Parameters
+    ----------
+    component : str
+        Name of the component that has not been fitted yet
+        (e.g. ``"ExplainablePreprocessor"``).
+    hint : str
+        Short message telling the caller what to do
+        (e.g. ``"Call fit() before transform."``).
+        Defaults to a generic reminder.
+
+    Examples
+    --------
+    ::
+
+        raise ComponentNotFittedError(
+            "ExplainablePreprocessor",
+            "Call fit() before transform().",
+        )
+        # str(exc) → "'ExplainablePreprocessor' has not been fitted yet.
+        #              Call fit() before transform()."
+        # exc.component → "ExplainablePreprocessor"
+        # exc.hint      → "Call fit() before transform()."
     """
+
+    def __init__(
+        self,
+        component: str,
+        hint: str = "Call fit() before calling this method.",
+    ) -> None:
+        super().__init__(
+            message=f"'{component}' has not been fitted yet. {hint}",
+            context={"component": component, "hint": hint},
+        )
+        self.component = component
+        self.hint = hint
 
 
 class ModelSelectionError(MentorMLError):
