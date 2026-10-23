@@ -530,31 +530,65 @@ class TargetAnalyzer:
         counts = target.value_counts()
         n_total = len(target.dropna())
         n_classes = len(counts)
+
+        if n_total == 0 or n_classes == 0:
+            result["n_classes"] = 0
+            result["class_counts"] = {}
+            result["imbalance_ratio"] = None
+            log.append(DecisionRecord(
+                component="TargetAnalyzer",
+                action="target_empty",
+                rationale=f"Target '{target_col}' contains no non-null values. Cannot analyze class balance.",
+                data={"n_classes": 0},
+                severity=Severity.CRITICAL,
+            ))
+            return
+
+        if n_classes == 1:
+            result["n_classes"] = 1
+            result["class_counts"] = {str(k): int(v) for k, v in counts.items()}
+            result["imbalance_ratio"] = 1.0
+            log.append(DecisionRecord(
+                component="TargetAnalyzer",
+                action="target_single_class",
+                rationale=(
+                    f"Target '{target_col}' has only a single class: {list(counts.keys())[0]}. "
+                    "Supervised classification requires at least 2 distinct classes."
+                ),
+                data={"n_classes": 1, "class": str(list(counts.keys())[0])},
+                severity=Severity.CRITICAL,
+            ))
+            return
+
         minority_pct = float(counts.min() / n_total)
         majority_pct = float(counts.max() / n_total)
-        imbalance_ratio = float(counts.max() / counts.min()) if counts.min() > 0 else float("inf")
+        imbalance_ratio = float(counts.max() / counts.min()) if counts.min() > 0 else None
 
         result["n_classes"] = n_classes
         result["class_counts"] = {str(k): int(v) for k, v in counts.items()}
-        result["imbalance_ratio"] = round(imbalance_ratio, 2)
+        result["imbalance_ratio"] = round(imbalance_ratio, 2) if imbalance_ratio is not None else None
 
-        if minority_pct < 0.05:
+        expected_share = 1.0 / n_classes
+        is_severe = (minority_pct < 0.05) or (imbalance_ratio is not None and imbalance_ratio >= 10.0)
+        is_moderate = (minority_pct < expected_share * 0.5) or (imbalance_ratio is not None and imbalance_ratio >= 3.0)
+
+        if is_severe:
             severity = Severity.CRITICAL
             rationale = (
                 f"Target '{target_col}' has severe class imbalance: "
                 f"minority class is only {minority_pct:.1%} of samples "
-                f"(imbalance ratio: {imbalance_ratio:.1f}x). "
-                "A naïve model will ignore the minority class entirely. "
+                + (f"(imbalance ratio: {imbalance_ratio:.1f}x). " if imbalance_ratio is not None else ". ")
+                + "A naïve model will ignore the minority class entirely. "
                 "Strongly recommend SMOTE oversampling, class_weight='balanced', "
                 "or a threshold-moving strategy. Use F1-score or AUC-PR, not accuracy."
             )
-        elif minority_pct < 0.20:
+        elif is_moderate:
             severity = Severity.WARNING
             rationale = (
                 f"Target '{target_col}' has moderate class imbalance: "
                 f"minority class is {minority_pct:.1%} of samples "
-                f"(imbalance ratio: {imbalance_ratio:.1f}x). "
-                "Consider class_weight='balanced' and using F1-score for evaluation."
+                + (f"(imbalance ratio: {imbalance_ratio:.1f}x). " if imbalance_ratio is not None else ". ")
+                + "Consider class_weight='balanced' and using F1-score for evaluation."
             )
         else:
             severity = Severity.INFO
@@ -571,7 +605,7 @@ class TargetAnalyzer:
             data={
                 "n_classes": n_classes,
                 "minority_pct": round(minority_pct, 4),
-                "imbalance_ratio": round(imbalance_ratio, 2),
+                "imbalance_ratio": round(imbalance_ratio, 2) if imbalance_ratio is not None else None,
             },
             severity=severity,
         ))
