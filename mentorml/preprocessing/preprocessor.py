@@ -242,7 +242,7 @@ class ExplainablePreprocessor:
                 continue
             categories = self._ohe_categories[col]
             for cat in categories:
-                df_out[f"{col}__{cat}"] = (df_out[col] == cat).astype(int)
+                df_out[f"{col}__{cat}"] = (df_out[col].astype(str) == str(cat)).astype(int)
             df_out.drop(columns=[col], inplace=True)
 
         # Label encoding
@@ -288,7 +288,7 @@ class ExplainablePreprocessor:
         # From quality report (high missing)
         if quality_report:
             for col in quality_report.get("columns_to_drop", []):
-                if col in df.columns:
+                if col in df.columns and col != self.config.target_column:
                     to_drop.add(col)
                     log.append(
                         DecisionRecord(
@@ -355,9 +355,15 @@ class ExplainablePreprocessor:
 
             if cat == "datetime" or pd.api.types.is_datetime64_any_dtype(df[col]):
                 self._datetime_cols.append(col)
-            elif cat == "numeric" or pd.api.types.is_numeric_dtype(df[col]):
+            elif (cat == "numeric" or pd.api.types.is_numeric_dtype(df[col])) and not pd.api.types.is_bool_dtype(df[col]):
                 self._numeric_cols.append(col)
-            elif cat in ("categorical", "boolean", "text") or df[col].dtype == object:
+            elif (
+                cat in ("categorical", "boolean", "text")
+                or pd.api.types.is_string_dtype(df[col])
+                or pd.api.types.is_object_dtype(df[col])
+                or pd.api.types.is_bool_dtype(df[col])
+                or isinstance(df[col].dtype, pd.CategoricalDtype)
+            ):
                 self._categorical_cols.append(col)
 
     def _learn_imputation(self, df: pd.DataFrame, log: DecisionLog) -> None:
