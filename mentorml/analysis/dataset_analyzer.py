@@ -673,7 +673,7 @@ class CorrelationAnalyzer:
         for i, col_a in enumerate(numeric_cols):
             for col_b in numeric_cols[i + 1 :]:
                 corr_val = corr_matrix.loc[col_a, col_b]
-                if abs(corr_val) >= config.correlation_threshold:
+                if not math.isnan(corr_val) and abs(corr_val) >= config.correlation_threshold:
                     high_pairs.append({
                         "col_a": col_a,
                         "col_b": col_b,
@@ -708,7 +708,10 @@ class CorrelationAnalyzer:
 
         # Convert matrix to a serialisable nested dict
         corr_dict = {
-            col: {c: round(float(v), 4) for c, v in row.items()}
+            col: {
+                c: (round(float(v), 4) if not math.isnan(v) else None)
+                for c, v in row.items()
+            }
             for col, row in corr_matrix.to_dict().items()
         }
 
