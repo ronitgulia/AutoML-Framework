@@ -181,15 +181,16 @@ class ColumnProfile:
             "cardinality_ratio": round(self.cardinality_ratio, 4),
             "is_constant": self.is_constant,
             "is_id_like": self.is_id_like,
-            "top_values": self.top_values,
+            "top_values": [(val.item() if hasattr(val, "item") else val, cnt) for val, cnt in self.top_values],
             # Numeric stats — round for readability
             "mean": round(self.mean, 4) if self.mean is not None else None,
-            "std": round(self.std, 4) if self.std is not None else None,
+            "std": round(self.std, 4) if self.std is not None and not math.isnan(self.std) else None,
             "min_val": round(self.min_val, 4) if self.min_val is not None else None,
             "q25": round(self.q25, 4) if self.q25 is not None else None,
             "median": round(self.median, 4) if self.median is not None else None,
             "q75": round(self.q75, 4) if self.q75 is not None else None,
             "max_val": round(self.max_val, 4) if self.max_val is not None else None,
+            "iqr": round(self.iqr, 4) if self.iqr is not None else None,
             "skewness": round(self.skewness, 4) if self.skewness is not None else None,
             "kurtosis": round(self.kurtosis, 4) if self.kurtosis is not None else None,
             "n_outliers": self.n_outliers,
@@ -350,7 +351,8 @@ class ColumnProfiler:
         iqr = q75 - q25
 
         profile.mean = float(non_null.mean())
-        profile.std = float(non_null.std())
+        std_val = non_null.std()
+        profile.std = float(std_val) if not math.isnan(std_val) else 0.0
         profile.min_val = float(non_null.min())
         profile.q25 = q25
         profile.median = float(non_null.median())
