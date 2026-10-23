@@ -858,15 +858,13 @@ class DatasetAnalyzer:
                 ))
 
         # 5. Correlation analysis (exclude target)
-        df_features = df.drop(columns=[self.config.target_column]) if (
-            self.config.target_column and self.config.target_column in df.columns
-        ) else df
         correlation_result = CorrelationAnalyzer.analyze(
-            df_features, self.config, log, target_col=self.config.target_column
+            df, self.config, log, target_col=self.config.target_column
         )
 
         # 6. Summary record
-        n_flagged = len(flagged["constant"]) + len(flagged["id_like"]) + len(flagged["high_missing"])
+        unique_flagged = set(flagged["constant"]) | set(flagged["id_like"]) | set(flagged["high_missing"])
+        n_flagged = len(unique_flagged)
         log.append(DecisionRecord(
             component="DatasetAnalyzer",
             action="analysis_complete",
@@ -1036,11 +1034,12 @@ class DatasetAnalyzer:
 
         Returns a dict of ``{issue_type: [column_names]}``.
         """
-        constant_cols = [name for name, p in profiles.items() if p.is_constant]
-        id_like_cols = [name for name, p in profiles.items() if p.is_id_like]
+        target = self.config.target_column
+        constant_cols = [name for name, p in profiles.items() if p.is_constant and name != target]
+        id_like_cols = [name for name, p in profiles.items() if p.is_id_like and name != target]
         high_missing_cols = [
             name for name, p in profiles.items()
-            if p.missing_pct >= self.config.missing_threshold
+            if p.missing_pct >= self.config.missing_threshold and name != target
         ]
 
         if constant_cols:
