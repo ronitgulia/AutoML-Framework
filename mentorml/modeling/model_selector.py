@@ -50,7 +50,6 @@ _CLASSIFICATION_CANDIDATES: dict[str, Any] = {
     "LogisticRegression": lambda cfg: LogisticRegression(
         max_iter=500,
         random_state=cfg.random_state,
-        n_jobs=cfg.n_jobs,
     ),
     "RandomForestClassifier": lambda cfg: RandomForestClassifier(
         n_estimators=100,
@@ -155,7 +154,17 @@ class ModelSelector:
             if is_classification
             else _REGRESSION_CANDIDATES
         )
-        scoring = "roc_auc" if is_classification else "neg_root_mean_squared_error"
+
+        target_encoder = None
+        if is_classification:
+            from sklearn.preprocessing import LabelEncoder
+            target_encoder = LabelEncoder()
+            y_arr = target_encoder.fit_transform(y)
+            y = pd.Series(y_arr, index=getattr(y, "index", None))
+            n_classes = len(target_encoder.classes_)
+            scoring = "roc_auc_ovr" if n_classes > 2 else "roc_auc"
+        else:
+            scoring = "neg_root_mean_squared_error"
 
         scores: dict[str, float] = {}
         for name, factory in candidates.items():
@@ -169,39 +178,65 @@ class ModelSelector:
                     scoring=scoring,
                     n_jobs=self.config.n_jobs,
                 )
-                mean_score = float(np.mean(cv_scores))
-                scores[name] = mean_score
-
-                log.append(
-                    DecisionRecord(
-                        component="ModelSelector",
-                        action=f"cv_score:{name}",
-                        rationale=(
-                            f"{name}: {scoring}={mean_score:.4f} "
-                            f"(±{float(np.std(cv_scores)):.4f}) "
-                            f"over {self.config.cv_folds} folds."
-                        ),
-                        severity=Severity.INFO,
-                        data={
-                            "model": name,
-                            "mean_score": round(mean_score, 4),
-                            "std_score": round(float(np.std(cv_scores)), 4),
-                            "scoring": scoring,
-                        },
-                    )
-                )
             except Exception as exc:  # noqa: BLE001
-                logger.warning("Model %s failed CV: %s", name, exc)
-                log.append(
-                    DecisionRecord(
-                        component="ModelSelector",
-                        action=f"cv_failed:{name}",
-                        rationale=f"{name} failed cross-validation: {exc}",
-                        data={},
-
-                        severity=Severity.WARNING,
+                # Fallback to f1_weighted if roc_auc fails on small or imbalanced folds
+                if is_classification and scoring != "f1_weighted":
+                    try:
+                        scoring = "f1_weighted"
+                        cv_scores = cross_val_score(
+                            model,
+                            X,
+                            y,
+                            cv=self.config.cv_folds,
+                            scoring=scoring,
+                            n_jobs=self.config.n_jobs,
+                        )
+                    except Exception as inner_exc:  # noqa: BLE001
+                        logger.warning("Model %s failed CV: %s", name, inner_exc)
+                        log.append(
+                            DecisionRecord(
+                                component="ModelSelector",
+                                action=f"cv_failed:{name}",
+                                rationale=f"{name} failed cross-validation: {inner_exc}",
+                                data={},
+                                severity=Severity.WARNING,
+                            )
+                        )
+                        continue
+                else:
+                    logger.warning("Model %s failed CV: %s", name, exc)
+                    log.append(
+                        DecisionRecord(
+                            component="ModelSelector",
+                            action=f"cv_failed:{name}",
+                            rationale=f"{name} failed cross-validation: {exc}",
+                            data={},
+                            severity=Severity.WARNING,
+                        )
                     )
+                    continue
+
+            mean_score = float(np.mean(cv_scores))
+            scores[name] = mean_score
+
+            log.append(
+                DecisionRecord(
+                    component="ModelSelector",
+                    action=f"cv_score:{name}",
+                    rationale=(
+                        f"{name}: {scoring}={mean_score:.4f} "
+                        f"(±{float(np.std(cv_scores)):.4f}) "
+                        f"over {self.config.cv_folds} folds."
+                    ),
+                    severity=Severity.INFO,
+                    data={
+                        "model": name,
+                        "mean_score": round(mean_score, 4),
+                        "std_score": round(float(np.std(cv_scores)), 4),
+                        "scoring": scoring,
+                    },
                 )
+            )
 
         if not scores:
             raise RuntimeError("All candidate models failed cross-validation.")
@@ -241,7 +276,14 @@ class ModelSelector:
         return {
             "best_model": best_model,
             "best_model_name": best_name,
+            "best_score": round(scores[best_name], 4),
             "task_type": task_type,
             "cv_scores": {n: round(s, 4) for n, s in scores.items()},
             "scoring_metric": scoring,
+            "metric_name": scoring,
+            "leaderboard": [
+                {"model_name": n, "name": n, "score": round(s, 4), "cv_score": round(s, 4)}
+                for n, s in ranking
+            ],
+            "target_encoder": target_encoder,
         }
