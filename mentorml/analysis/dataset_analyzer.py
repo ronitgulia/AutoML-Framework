@@ -261,10 +261,17 @@ class ColumnProfiler:
             series, n_unique, cardinality_ratio, config
         )
 
+        is_numeric_id = (
+            dtype_category == DtypeCategory.NUMERIC
+            and (
+                pd.api.types.is_integer_dtype(series.dtype)
+                or name.lower().endswith(("_id", "id", "_key", "key"))
+            )
+        )
         is_id_like = (
             cardinality_ratio >= cls._ID_CARDINALITY_THRESHOLD
             and not is_constant
-            and dtype_category in (DtypeCategory.CATEGORICAL, DtypeCategory.TEXT)
+            and (dtype_category in (DtypeCategory.CATEGORICAL, DtypeCategory.TEXT) or is_numeric_id)
             and n_non_null > 20  # avoid flagging tiny datasets
         )
 
