@@ -311,12 +311,16 @@ class ColumnProfiler:
         if pd.api.types.is_numeric_dtype(dtype):
             # Binary numeric (only 0 and 1) → treat as boolean
             unique_vals = set(series.dropna().unique())
-            if unique_vals <= {0, 1, 0.0, 1.0}:
+            if unique_vals and unique_vals <= {0, 1, 0.0, 1.0}:
                 return DtypeCategory.BOOLEAN
             return DtypeCategory.NUMERIC
 
-        if pd.api.types.is_object_dtype(dtype) or isinstance(dtype, pd.CategoricalDtype):
-            # High-cardinality object → likely free text
+        if (
+            pd.api.types.is_string_dtype(dtype)
+            or pd.api.types.is_object_dtype(dtype)
+            or isinstance(dtype, pd.CategoricalDtype)
+        ):
+            # High-cardinality string/object → likely free text
             if cardinality_ratio >= ColumnProfiler._TEXT_CARDINALITY_THRESHOLD and n_unique > config.cardinality_threshold:
                 return DtypeCategory.TEXT
             return DtypeCategory.CATEGORICAL
