@@ -165,8 +165,9 @@ class HTMLReportGenerator:
 
     def _render_dataset_overview(self, analysis_result: dict[str, Any]) -> str:
         n_rows = analysis_result.get("n_rows", analysis_result.get("rows", "N/A"))
-        n_cols = analysis_result.get("n_columns", analysis_result.get("columns", "N/A"))
-        task_type = analysis_result.get("task_type", "auto-inferred")
+        n_cols = analysis_result.get("n_cols", analysis_result.get("n_columns", analysis_result.get("columns", "N/A")))
+        target_info = analysis_result.get("target") if isinstance(analysis_result.get("target"), dict) else {}
+        task_type = target_info.get("task_type", analysis_result.get("task_type", "auto-inferred"))
 
         return f"""
         <div class="card">
