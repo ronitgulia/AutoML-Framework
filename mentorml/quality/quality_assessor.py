@@ -401,6 +401,15 @@ class DataQualityAssessor:
         df: pd.DataFrame,
         log: DecisionLog,
     ) -> dict[str, Any]:
+        return self._analyze(df, log)
+
+    assess = analyze
+
+    def _analyze(
+        self,
+        df: pd.DataFrame,
+        log: DecisionLog,
+    ) -> dict[str, Any]:
         """
         Run a full quality audit on ``df``.
 
@@ -480,13 +489,16 @@ class DataQualityAssessor:
         columns_to_drop = [
             i.column
             for i in all_issues
-            if i.issue_type == "missing_critical" and i.column is not None
+            if i.issue_type == "missing_critical"
+            and i.column is not None
+            and i.column != self.config.target_column
         ]
         columns_to_impute = [
             i.column
             for i in all_issues
             if i.issue_type in ("missing_high", "missing_low")
             and i.column is not None
+            and i.column != self.config.target_column
         ]
 
         report: dict[str, Any] = {
