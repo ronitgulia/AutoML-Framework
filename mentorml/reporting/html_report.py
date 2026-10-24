@@ -219,12 +219,30 @@ class HTMLReportGenerator:
         """
 
     def _render_model_leaderboard(self, model_selection_result: dict[str, Any]) -> str:
-        best_model = model_selection_result.get("best_model", "N/A")
+        if not model_selection_result:
+            return ""
+
+        best_model = model_selection_result.get("best_model_name")
+        if not best_model:
+            model_obj = model_selection_result.get("best_model")
+            if isinstance(model_obj, str):
+                best_model = model_obj
+            elif model_obj is not None:
+                best_model = type(model_obj).__name__
+            else:
+                best_model = "N/A"
+
         best_score = model_selection_result.get("best_score", "N/A")
-        metric_name = model_selection_result.get("metric_name", "CV Score")
+        metric_name = model_selection_result.get("metric_name", model_selection_result.get("scoring_metric", "CV Score"))
+
+        leaderboard = model_selection_result.get("leaderboard", [])
+        if not leaderboard and "cv_scores" in model_selection_result:
+            leaderboard = [
+                {"model_name": k, "score": v}
+                for k, v in sorted(model_selection_result["cv_scores"].items(), key=lambda x: x[1], reverse=True)
+            ]
 
         rows = []
-        leaderboard = model_selection_result.get("leaderboard", [])
         if leaderboard:
             for rank, item in enumerate(leaderboard, start=1):
                 name = item.get("model_name", item.get("name", "Model"))
@@ -252,7 +270,7 @@ class HTMLReportGenerator:
 
         return f"""
         <div class="card">
-            <h2>Phase 5  Model Evaluation & Leaderboard</h2>
+            <h2>Phase 5 — Model Evaluation & Leaderboard</h2>
             <div class="grid-stats">
                 <div class="stat-box">
                     <div class="stat-label">Best Estimator</div>
@@ -273,6 +291,61 @@ class HTMLReportGenerator:
                 </thead>
                 <tbody>
                     {table_rows}
+                </tbody>
+            </table>
+        </div>
+        """
+
+    def _render_feature_importance_section(self, explanation_result: dict[str, Any]) -> str:
+        if not explanation_result:
+            return ""
+
+        importances = explanation_result.get("feature_importances", [])
+        if not importances and "feature_importance" in explanation_result:
+            fi = explanation_result["feature_importance"]
+            if isinstance(fi, dict):
+                importances = [{"feature": k, "importance": v} for k, v in fi.items()]
+            elif isinstance(fi, list):
+                importances = fi
+
+        if not importances:
+            return ""
+
+        method = explanation_result.get("method", "SHAP")
+        max_imp = max(abs(item.get("importance", 1.0)) for item in importances) or 1.0
+
+        rows = []
+        for rank, item in enumerate(importances[:10], start=1):
+            feat = item.get("feature", f"Feature {rank}")
+            imp = item.get("importance", 0.0)
+            pct = min(100.0, max(2.0, (abs(imp) / max_imp) * 100.0))
+            rows.append(f"""
+            <tr>
+                <td style="width: 50px;"><strong>#{rank}</strong></td>
+                <td style="font-family: monospace;">{html.escape(str(feat))}</td>
+                <td style="width: 140px; font-weight: 600; color: var(--accent);">{imp:.4f}</td>
+                <td>
+                    <div style="background: rgba(255,255,255,0.05); border-radius: 4px; overflow: hidden; height: 12px; width: 100%;">
+                        <div style="background: var(--accent); height: 100%; width: {pct:.1f}%;"></div>
+                    </div>
+                </td>
+            </tr>
+            """)
+
+        return f"""
+        <div class="card">
+            <h2>Phase 6 — Global Feature Importance ({html.escape(str(method))})</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Rank</th>
+                        <th>Feature</th>
+                        <th>Importance</th>
+                        <th>Relative Weight</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {''.join(rows)}
                 </tbody>
             </table>
         </div>
@@ -334,6 +407,7 @@ class HTMLReportGenerator:
         {self._render_dataset_overview(analysis_result)}
         {self._render_quality_section(quality_report)}
         {self._render_model_leaderboard(model_selection_result)}
+        {self._render_feature_importance_section(explanation_result)}
         {self._render_narrative_section(narrative)}
         {self._render_decision_log(log)}
     </div>
