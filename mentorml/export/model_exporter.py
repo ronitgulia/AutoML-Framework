@@ -40,6 +40,7 @@ Usage: python predict.py --input new_data.csv --output predictions.csv
 """
 import argparse
 import json
+import os
 import joblib
 import pandas as pd
 
@@ -52,6 +53,7 @@ def main():
     # Load artefacts
     model = joblib.load("model.joblib")
     preprocessor = joblib.load("preprocessor.joblib")
+    fe = joblib.load("feature_engineer.joblib") if os.path.exists("feature_engineer.joblib") else None
     with open("feature_names.json") as f:
         feature_names = json.load(f)
 
@@ -59,13 +61,15 @@ def main():
     df = pd.read_csv(args.input)
     from mentorml.core.decision import DecisionLog
     log = DecisionLog()
-    df_proc = preprocessor.transform(df, log)
+    df_clean = preprocessor.transform(df, log)
+    df_eng = fe.transform(df_clean, log) if fe is not None else df_clean
 
     # Align columns
+    df_num = df_eng.select_dtypes(include="number").fillna(0)
     for col in feature_names:
-        if col not in df_proc.columns:
-            df_proc[col] = 0
-    df_proc = df_proc[[c for c in feature_names if c in df_proc.columns]]
+        if col not in df_num.columns:
+            df_num[col] = 0
+    df_proc = df_num[feature_names]
 
     # Predict
     predictions = model.predict(df_proc)
@@ -102,6 +106,7 @@ class ModelExporter:
             log=log,
             report_path="reports/churn_20240101.html",
             output_dir="exports/",
+            feature_engineer=fitted_feature_engineer,
         )
         print(f"Exported to {export_path}")
     """
@@ -118,6 +123,7 @@ class ModelExporter:
         output_dir: str = ".",
         report_path: str | None = None,
         metadata: dict[str, Any] | None = None,
+        feature_engineer: Any = None,
     ) -> str:
         """
         Export all artefacts to ``output_dir/<project_name>/``.
@@ -168,6 +174,20 @@ class ModelExporter:
         joblib.dump(preprocessor, prep_path)
         logger.info("Preprocessor saved to %s", prep_path)
 
+        files = [
+            "model.joblib",
+            "preprocessor.joblib",
+            "feature_names.json",
+            "decisions.json",
+            "predict.py",
+        ]
+
+        if feature_engineer is not None:
+            fe_path = os.path.join(export_dir, "feature_engineer.joblib")
+            joblib.dump(feature_engineer, fe_path)
+            logger.info("FeatureEngineer saved to %s", fe_path)
+            files.append("feature_engineer.joblib")
+
         # 3. Feature names
         feat_path = os.path.join(export_dir, "feature_names.json")
         with open(feat_path, "w", encoding="utf-8") as fh:
@@ -197,13 +217,7 @@ class ModelExporter:
             "model_type": type(model).__name__,
             "n_features": len(feature_names),
             "n_decisions": len(log),
-            "files": [
-                "model.joblib",
-                "preprocessor.joblib",
-                "feature_names.json",
-                "decisions.json",
-                "predict.py",
-            ],
+            "files": files,
             **(metadata or {}),
         }
         if report_path and os.path.exists(report_path):
