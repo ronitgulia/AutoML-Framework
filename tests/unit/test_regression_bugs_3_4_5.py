@@ -34,11 +34,12 @@ from mentorml.quality.quality_assessor import DataQualityAssessor, QualityIssue
 # ---------------------------------------------------------------------------
 
 def _make_df(n: int = 20) -> pd.DataFrame:
+    cities = (["London", "Paris"] * ((n // 2) + 1))[:n]
     return pd.DataFrame(
         {
             "age":    list(range(n)),
             "income": [float(i * 1000) for i in range(n)],
-            "city":   ["London", "Paris"] * (n // 2),
+            "city":   cities,
             "target": [i % 2 for i in range(n)],
         }
     )

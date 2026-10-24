@@ -53,11 +53,14 @@ class DataPreprocessor(BaseEstimator, TransformerMixin):
         self.cat_cols_ = X.select_dtypes(exclude=[np.number]).columns.tolist()
 
         # Numerical imputer
-        if self.impute_strategy == "knn":
-            self.num_imputer_ = KNNImputer(n_neighbors=5)
+        if self.num_cols_:
+            if self.impute_strategy == "knn":
+                self.num_imputer_ = KNNImputer(n_neighbors=5)
+            else:
+                self.num_imputer_ = SimpleImputer(strategy=self.impute_strategy)
+            self.num_imputer_.fit(X[self.num_cols_])
         else:
-            self.num_imputer_ = SimpleImputer(strategy=self.impute_strategy)
-        self.num_imputer_.fit(X[self.num_cols_])
+            self.num_imputer_ = None
 
         # Outlier bounds (IQR)
         if self.remove_outliers and self.num_cols_:
@@ -76,6 +79,8 @@ class DataPreprocessor(BaseEstimator, TransformerMixin):
             }
             self.scaler_ = scalers.get(self.scaler_type, StandardScaler())
             self.scaler_.fit(X[self.num_cols_])
+        else:
+            self.scaler_ = None
 
         # Categorical encoder
         if self.cat_cols_:
@@ -88,6 +93,8 @@ class DataPreprocessor(BaseEstimator, TransformerMixin):
                     handle_unknown="use_encoded_value", unknown_value=-1
                 )
             self.cat_encoder_.fit(X[self.cat_cols_])
+        else:
+            self.cat_encoder_ = None
 
         return self
 
@@ -95,22 +102,27 @@ class DataPreprocessor(BaseEstimator, TransformerMixin):
         X = X.copy()
 
         # Impute numerics
-        X[self.num_cols_] = self.num_imputer_.transform(X[self.num_cols_])
+        if self.num_cols_ and self.num_imputer_ is not None:
+            X[self.num_cols_] = self.num_imputer_.transform(X[self.num_cols_])
 
         # Clip outliers
-        if self.remove_outliers and self.num_cols_:
+        if self.remove_outliers and self.num_cols_ and hasattr(self, "lower_"):
             X[self.num_cols_] = X[self.num_cols_].clip(
                 lower=self.lower_, upper=self.upper_, axis=1
             )
 
         # Scale numerics
-        if self.scale and self.num_cols_:
+        if self.scale and self.num_cols_ and self.scaler_ is not None:
             X[self.num_cols_] = self.scaler_.transform(X[self.num_cols_])
 
-        # Encode categoricals
-        if self.cat_cols_:
+        # Encode categoricals & combine
+        if self.cat_cols_ and self.cat_encoder_ is not None:
             cat_encoded = self.cat_encoder_.transform(X[self.cat_cols_])
-            num_part = X[self.num_cols_].values
-            return np.hstack([num_part, cat_encoded])
+            if self.num_cols_:
+                return np.hstack([X[self.num_cols_].values, cat_encoded])
+            return cat_encoded
 
-        return X[self.num_cols_].values
+        if self.num_cols_:
+            return X[self.num_cols_].values
+
+        return np.empty((len(X), 0))

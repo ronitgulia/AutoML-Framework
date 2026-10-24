@@ -17,6 +17,7 @@ from sklearn.ensemble import (
     RandomForestRegressor,
 )
 from sklearn.linear_model import LogisticRegression, Ridge
+from sklearn.base import clone
 from sklearn.metrics import get_scorer
 from sklearn.model_selection import cross_val_score
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
@@ -90,7 +91,15 @@ class ModelSelector:
         """
         results: List[ModelResult] = []
 
-        for name, model in self._catalogue.items():
+        # Adjust metric for multiclass if default roc_auc is requested
+        effective_metric = self.metric
+        if self.task == "classification":
+            n_classes = len(np.unique(y))
+            if n_classes > 2 and effective_metric == "roc_auc":
+                effective_metric = "roc_auc_ovr"
+
+        for name, template_model in self._catalogue.items():
+            model = clone(template_model)
             logger.info("Evaluating %s ...", name)
             try:
                 scores = cross_val_score(
@@ -98,7 +107,7 @@ class ModelSelector:
                     X,
                     y,
                     cv=self.cv,
-                    scoring=self.metric,
+                    scoring=effective_metric,
                     n_jobs=self.n_jobs,
                 )
                 result = ModelResult(
@@ -117,9 +126,11 @@ class ModelSelector:
         results.sort(key=lambda r: r.mean_score, reverse=True)
         self.results_ = results
         self.best_ = results[0] if results else None
+        if self.best_ is not None:
+            self.best_.model.fit(X, y)
         return results
 
     @property
     def best_model(self) -> Optional[Any]:
-        """Returns the estimator with the highest cross-val score."""
+        """Returns the estimator with the highest cross-val score (fitted on X, y)."""
         return self.best_.model if self.best_ else None
