@@ -231,16 +231,18 @@ class MentorPipeline:
         # ----------------------------------------------------------------
         # Separate features and target
         # ----------------------------------------------------------------
-        target_col = self.config.target_column or analysis_result.get(
-            "target", {}
-        ).get("column")
+        target_info = analysis_result.get("target") or {}
+        target_col = self.config.target_column or target_info.get("target_col", target_info.get("column"))
 
         if target_col and target_col in df.columns:
-            X_raw = df.drop(columns=[target_col])
-            y = df[target_col]
+            # Handle missing target rows strictly (never leak or impute target)
+            clean_df = df.dropna(subset=[target_col]).copy()
+            X_raw = clean_df.drop(columns=[target_col])
+            y_raw = clean_df[target_col]
         else:
-            X_raw = df.copy()
-            y = pd.Series(dtype="float64")
+            clean_df = df.copy()
+            X_raw = clean_df.copy()
+            y_raw = pd.Series(dtype="float64")
             log.append(
                 DecisionRecord(
                     component="MentorPipeline",
@@ -250,26 +252,56 @@ class MentorPipeline:
                         "Pipeline will preprocess without a target."
                     ),
                     data={},
-
                     severity=Severity.WARNING,
                 )
             )
 
         # ----------------------------------------------------------------
-        # Phase 3: Explainable Preprocessing
+        # Strict Featurization Ordering (Prevent Data Leakage)
+        # Split train and test BEFORE fitting transformers
+        # ----------------------------------------------------------------
+        has_target = len(y_raw) > 0
+        can_split = has_target and len(clean_df) >= 10
+
+        if can_split:
+            stratify_target = None
+            if task_type == "classification":
+                val_counts = y_raw.value_counts()
+                if len(val_counts) >= 2 and val_counts.min() >= 2:
+                    stratify_target = y_raw
+
+            X_tr_raw, X_te_raw, y_tr, y_te = train_test_split(
+                X_raw,
+                y_raw,
+                test_size=self.config.test_size,
+                random_state=self.config.random_state,
+                stratify=stratify_target,
+            )
+        else:
+            X_tr_raw, X_te_raw = X_raw.copy(), X_raw.copy()
+            y_tr, y_te = y_raw.copy(), y_raw.copy()
+
+        # ----------------------------------------------------------------
+        # Phase 3: Explainable Preprocessing (fitted strictly on train)
         # ----------------------------------------------------------------
         preprocessor = ExplainablePreprocessor(self.config)
-        preprocessor.fit(X_raw, log, analysis_result, quality_report)
-        X_clean = preprocessor.transform(X_raw, log)
+        preprocessor.fit(X_tr_raw, log, analysis_result, quality_report)
+        X_tr_clean = preprocessor.transform(X_tr_raw, log)
+        X_te_clean = preprocessor.transform(X_te_raw, log)
 
         # ----------------------------------------------------------------
-        # Phase 4: Feature Engineering
+        # Phase 4: Feature Engineering (fitted strictly on train)
         # ----------------------------------------------------------------
         fe = FeatureEngineer(self.config)
-        fe.fit(X_clean, log, analysis_result)
-        X_engineered = fe.transform(X_clean, log)
+        fe.fit(X_tr_clean, log, analysis_result)
+        X_tr_engineered = fe.transform(X_tr_clean, log)
+        X_te_engineered = fe.transform(X_te_clean, log)
 
-        feature_names = list(X_engineered.columns)
+        # Align numeric feature matrix
+        X_tr_num = X_tr_engineered.select_dtypes(include="number").fillna(0)
+        X_te_num = X_te_engineered.select_dtypes(include="number").fillna(0)
+        X_te_num = X_te_num.reindex(columns=X_tr_num.columns, fill_value=0)
+        feature_names = list(X_tr_num.columns)
 
         # ----------------------------------------------------------------
         # Phase 5: Model Selection
@@ -277,49 +309,42 @@ class MentorPipeline:
         model_selection_result: dict[str, Any] = {}
         fitted_model: Any = None
         best_model_name = "N/A"
+        y_te_eval = y_te
 
-        if len(y) > 0 and len(X_engineered) > 0:
-            X_num = X_engineered.select_dtypes(include="number").fillna(0)
+        if can_split and len(X_tr_num) >= 5:
+            selector = ModelSelector(self.config)
+            model_selection_result = selector.select(
+                X_tr_num, y_tr, log, task_type=task_type
+            )
+            fitted_model = model_selection_result["best_model"]
+            best_model_name = model_selection_result["best_model_name"]
 
-            if len(X_num) >= 10:
-                X_tr, X_te, y_tr, y_te = train_test_split(
-                    X_num,
-                    y,
-                    test_size=self.config.test_size,
-                    random_state=self.config.random_state,
+            # Map y_te using fitted target_encoder if applicable
+            target_enc = model_selection_result.get("target_encoder")
+            if target_enc is not None and len(y_te) > 0:
+                y_te_eval = pd.Series(
+                    target_enc.transform(y_te), index=getattr(y_te, "index", None)
                 )
-                selector = ModelSelector(self.config)
-                model_selection_result = selector.select(
-                    X_tr, y_tr, log, task_type=task_type
-                )
-                fitted_model = model_selection_result["best_model"]
-                best_model_name = model_selection_result["best_model_name"]
-            else:
-                log.append(
-                    DecisionRecord(
-                        component="MentorPipeline",
-                        action="model_selection_skipped",
-                        rationale="Too few rows for cross-validation; skipping model selection.",
-                        data={},
-
-                        severity=Severity.WARNING,
-                    )
-                )
-                X_te = X_engineered.select_dtypes(include="number").fillna(0)
-                y_te = y
         else:
-            X_te = X_engineered.select_dtypes(include="number").fillna(0)
-            y_te = y
+            log.append(
+                DecisionRecord(
+                    component="MentorPipeline",
+                    action="model_selection_skipped",
+                    rationale="Too few rows or target missing; skipping model selection.",
+                    data={},
+                    severity=Severity.WARNING,
+                )
+            )
 
         # ----------------------------------------------------------------
         # Phase 6: SHAP Explainability
         # ----------------------------------------------------------------
         explanation_result: dict[str, Any] = {}
-        if fitted_model is not None and len(X_te) > 0:
+        if fitted_model is not None and len(X_te_num) > 0:
             explainer = SHAPExplainer(self.config)
             try:
                 explanation_result = explainer.explain(
-                    fitted_model, X_te, log, y=y_te if len(y_te) > 0 else None
+                    fitted_model, X_te_num, log, y=y_te_eval if len(y_te_eval) > 0 else None
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Explainability failed: %s", exc)
@@ -329,7 +354,6 @@ class MentorPipeline:
                         action="explainability_failed",
                         rationale=f"Explainability step failed: {exc}",
                         data={},
-
                         severity=Severity.WARNING,
                     )
                 )
@@ -383,6 +407,7 @@ class MentorPipeline:
                         "task_type": task_type,
                         "best_model": best_model_name,
                     },
+                    feature_engineer=fe,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Export failed: %s", exc)

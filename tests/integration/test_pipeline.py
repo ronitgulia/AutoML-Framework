@@ -103,3 +103,87 @@ def test_pipeline_result_summary():
     summary = result.summary()
     assert "MockModel" in summary
     assert "classification" in summary
+
+
+def test_pipeline_fit_classification_and_export(sample_classification_data):
+    """Verify end-to-end classification fit, artifact export, and feature engineer persistence."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config = MentorConfig(
+            target_column="target",
+            task_type="classification",
+            cv_folds=2,
+            export_output_dir=tmp_dir,
+            report_output_dir=tmp_dir,
+            random_state=42,
+        )
+        pipeline = MentorPipeline(
+            config=config,
+            project_name="ClassificationProject",
+            generate_report=True,
+            export_artefacts=True,
+        )
+        result = pipeline.fit(sample_classification_data)
+
+        assert result.model is not None
+        assert result.model_name != "N/A"
+        assert result.task_type == "classification"
+        assert len(result.feature_names) > 0
+        assert result.export_dir is not None
+        assert os.path.exists(result.export_dir)
+
+        # Verify exported artefacts
+        assert os.path.exists(os.path.join(result.export_dir, "model.joblib"))
+        assert os.path.exists(os.path.join(result.export_dir, "preprocessor.joblib"))
+        assert os.path.exists(os.path.join(result.export_dir, "feature_engineer.joblib"))
+        assert os.path.exists(os.path.join(result.export_dir, "predict.py"))
+
+
+def test_pipeline_fit_regression(sample_regression_data):
+    """Verify end-to-end regression fit and non-empty evaluation."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config = MentorConfig(
+            target_column="target",
+            task_type="regression",
+            cv_folds=2,
+            export_output_dir=tmp_dir,
+            random_state=42,
+        )
+        pipeline = MentorPipeline(
+            config=config,
+            project_name="RegressionProject",
+            generate_report=False,
+            export_artefacts=False,
+        )
+        result = pipeline.fit(sample_regression_data)
+
+        assert result.model is not None
+        assert result.task_type == "regression"
+        assert len(result.feature_names) > 0
+
+
+def test_pipeline_prevents_data_leakage():
+    """Verify that preprocessing statistics are learned strictly on the training partition."""
+    np.random.seed(42)
+    n = 100
+    df = pd.DataFrame({
+        "num_val": np.linspace(0, 10, n),
+        "target": [0, 1] * (n // 2),
+    })
+
+    config = MentorConfig(
+        target_column="target",
+        task_type="classification",
+        test_size=0.2,
+        cv_folds=2,
+        random_state=42,
+    )
+    pipeline = MentorPipeline(config=config, generate_report=False, export_artefacts=False)
+    result = pipeline.fit(df)
+
+    # In train_test_split (80 train, 20 test), the scaler must be fit strictly on 80 samples
+    prep = result.preprocessor
+    assert prep._fitted is True
+    assert prep._scaler is not None
+    assert prep._scaler.n_samples_seen_ == 80
+    assert result.model is not None
+
