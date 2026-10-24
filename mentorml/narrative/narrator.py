@@ -124,7 +124,8 @@ class BusinessNarrator:
 
         n_rows = (analysis_result or {}).get("n_rows", "N/A")
         n_cols = (analysis_result or {}).get("n_cols", "N/A")
-        task = (analysis_result or {}).get("target", {}).get("inferred_task_type", "unknown")
+        target_info = (analysis_result or {}).get("target") or {}
+        task = target_info.get("task_type", target_info.get("inferred_task_type", "unknown"))
         overall_quality = (quality_report or {}).get("overall_severity", "ok")
 
         lines.append(
@@ -133,21 +134,27 @@ class BusinessNarrator:
         )
 
         quality_emoji = {
+            "critical": "🔴",
+            "warning": "🟡",
+            "info": "🟢",
+            "ok": "🟢",
             Severity.CRITICAL: "🔴",
             Severity.WARNING: "🟡",
             Severity.INFO: "🟢",
-            "ok": "🟢",
-        }.get(overall_quality, "⚪")
+        }.get(str(overall_quality).lower(), "⚪")
 
         lines.append(
             f"\n**Data Quality**: {quality_emoji} {str(overall_quality).upper()}"
         )
 
         if model_selection_result:
-            best_model = model_selection_result.get("best_model_name", "N/A")
-            metric = model_selection_result.get("scoring_metric", "score")
+            best_model = model_selection_result.get("best_model_name")
+            if not best_model:
+                bm = model_selection_result.get("best_model")
+                best_model = bm if isinstance(bm, str) else (type(bm).__name__ if bm else "N/A")
+            metric = model_selection_result.get("scoring_metric", model_selection_result.get("metric_name", "score"))
             scores = model_selection_result.get("cv_scores", {})
-            best_score = scores.get(best_model, 0.0)
+            best_score = model_selection_result.get("best_score", scores.get(best_model, 0.0))
             lines.append(
                 f"\n**Best Model**: `{best_model}` "
                 f"({metric}={best_score:.4f})"
@@ -173,8 +180,16 @@ class BusinessNarrator:
         lines = ["## 📋 Dataset Overview", ""]
         n_rows = analysis_result.get("n_rows", 0)
         n_cols = analysis_result.get("n_cols", 0)
-        n_dup = analysis_result.get("n_duplicate_rows", 0)
-        missing_pct = analysis_result.get("overall_missing_pct", 0.0)
+        n_dup = analysis_result.get("n_duplicates", analysis_result.get("n_duplicate_rows", 0))
+
+        profiles = analysis_result.get("column_profiles", {})
+        if profiles and n_rows > 0 and n_cols > 0:
+            def _get_val(p: Any, k: str, default: Any = 0) -> Any:
+                return getattr(p, k, default) if not isinstance(p, dict) else p.get(k, default)
+            total_missing = sum(_get_val(p, "n_missing", 0) for p in profiles.values())
+            missing_pct = total_missing / (n_rows * n_cols)
+        else:
+            missing_pct = analysis_result.get("overall_missing_pct", 0.0)
 
         lines.append(f"| Metric | Value |")
         lines.append(f"|--------|-------|")
@@ -184,14 +199,13 @@ class BusinessNarrator:
         lines.append(f"| Overall missing | {missing_pct:.1%} |")
 
         # Target info
-        target = analysis_result.get("target", {})
+        target = analysis_result.get("target") or {}
         if target:
-            task = target.get("inferred_task_type", "unknown")
-            col = target.get("column", "unknown")
+            task = target.get("task_type", target.get("inferred_task_type", "unknown"))
+            col = target.get("target_col", target.get("column", "unknown"))
             lines.append(f"| Target column | `{col}` ({task}) |")
 
         # Column type breakdown
-        profiles = analysis_result.get("column_profiles", {})
         if profiles:
             from collections import Counter
             def _get_cat(p: Any) -> str:
@@ -219,9 +233,9 @@ class BusinessNarrator:
             return "\n".join(lines)
 
         severity_counts = quality_report.get("n_issues_by_severity", {})
-        n_crit = severity_counts.get(Severity.CRITICAL, 0)
-        n_warn = severity_counts.get(Severity.WARNING, 0)
-        n_info = severity_counts.get(Severity.INFO, 0)
+        n_crit = severity_counts.get("critical", severity_counts.get(Severity.CRITICAL, 0))
+        n_warn = severity_counts.get("warning", severity_counts.get(Severity.WARNING, 0))
+        n_info = severity_counts.get("info", severity_counts.get(Severity.INFO, 0))
 
         lines.append(
             f"Found **{len(issues)} issues**: "
@@ -230,13 +244,17 @@ class BusinessNarrator:
         lines.append("")
 
         emoji_map = {
+            "critical": "🔴",
+            "warning": "🟡",
+            "info": "🔵",
             Severity.CRITICAL: "🔴",
             Severity.WARNING: "🟡",
             Severity.INFO: "🔵",
         }
         for issue in issues:
             sev = issue.get("severity", "info")
-            emoji = emoji_map.get(sev, "⚪")
+            sev_key = sev.value if hasattr(sev, "value") else str(sev).lower()
+            emoji = emoji_map.get(sev_key, "⚪")
             col = issue.get("column", "dataset-level")
             lines.append(f"- {emoji} **{col}**: {issue.get('detail', '')}")
             rec = issue.get("recommendation", "")
@@ -282,18 +300,32 @@ class BusinessNarrator:
             lines.append("")
 
         if explanation_result:
-            method = explanation_result.get("method", "unknown")
+            method = explanation_result.get("method", "SHAP")
             lines.append(f"### Top Predictive Features (method: `{method}`)")
             lines.append("")
             lines.append("| Rank | Feature | Importance |")
             lines.append("|------|---------|------------|")
-            importances = explanation_result.get("feature_importances", [])[:10]
+            importances = explanation_result.get("feature_importances", [])
+            if not importances:
+                if "top_features" in explanation_result:
+                    tf = explanation_result["top_features"]
+                    if isinstance(tf, list):
+                        importances = [
+                            {"feature": item[0], "importance": item[1]} if isinstance(item, (list, tuple)) else item
+                            for item in tf
+                        ]
+                elif "feature_importance" in explanation_result:
+                    fi = explanation_result["feature_importance"]
+                    if isinstance(fi, dict):
+                        importances = [{"feature": k, "importance": v} for k, v in fi.items()]
+                    elif isinstance(fi, list):
+                        importances = fi
+            importances = importances[:10]
             for i, item in enumerate(importances, 1):
                 feat = item.get("feature", "?")
                 imp = item.get("importance", 0.0)
-                bar = "█" * max(1, int(imp * 20 / max(
-                    importances[0].get("importance", 1), 1e-9
-                )))
+                max_first = importances[0].get("importance", 1) if importances else 1
+                bar = "█" * max(1, int(imp * 20 / max(max_first, 1e-9)))
                 lines.append(f"| {i} | `{feat}` | {imp:.6f} {bar} |")
 
         return "\n".join(lines)
@@ -306,7 +338,10 @@ class BusinessNarrator:
             return ""
 
         lines = ["## 🤖 Model Selection", ""]
-        best = model_selection_result.get("best_model_name", "N/A")
+        best = model_selection_result.get("best_model_name")
+        if not best:
+            bm = model_selection_result.get("best_model")
+            best = bm if isinstance(bm, str) else (type(bm).__name__ if bm else "N/A")
         task = model_selection_result.get("task_type", "N/A")
         metric = model_selection_result.get("scoring_metric", "score")
         scores = model_selection_result.get("cv_scores", {})
