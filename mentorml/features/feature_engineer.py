@@ -272,9 +272,14 @@ class FeatureEngineer:
                     continue
                 r = corr.loc[a, b]
                 if r >= self.config.correlation_threshold:
-                    # Drop the one with more missing
-                    drop_col = b
-                    keep_col = a
+                    # Drop the one with more missing values; guard target column
+                    miss_a = int(numeric_df[a].isna().sum())
+                    miss_b = int(numeric_df[b].isna().sum())
+                    if miss_a > miss_b and a != self.config.target_column:
+                        drop_col, keep_col = a, b
+                    else:
+                        drop_col = b if b != self.config.target_column else a
+                        keep_col = a if drop_col == b else b
                     self._drop_correlated.append(drop_col)
                     dropped.add(drop_col)
                     log.append(
